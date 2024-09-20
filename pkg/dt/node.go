@@ -234,6 +234,28 @@ func PropertyU64(name string, value uint64) Property {
 	}
 }
 
+// Property32 creates a uint32 property.
+func PropertyU32(name string, value uint32) Property {
+	b := make([]byte, 4)
+	binary.BigEndian.PutUint32(b, value)
+	return Property{
+		Name:  name,
+		Value: b,
+	}
+}
+
+func PropertyU32Array(name string, arr []uint32) Property {
+	b := bytes.NewBuffer(nil)
+	for _, val := range arr {
+		_ = binary.Write(b, binary.BigEndian, val)
+	}
+	return Property{
+		Name:  name,
+		Value: b.Bytes(),
+	}
+}
+
+
 // PropertyString creates a string property.
 func PropertyString(name string, value string) Property {
 	return Property{
