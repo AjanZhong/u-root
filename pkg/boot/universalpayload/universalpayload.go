@@ -374,11 +374,11 @@ func constructHOBList(dst *bytes.Buffer, src *bytes.Buffer, hobLen *uint64) erro
 }
 
 func prepareBootEnv(hobAddr uint64, entry uint64, mem *kexec.Memory) error {
-	stackBuffer := make([]byte, tmpStackSize)
+	stackBuffer := make([]byte, pageSize)
 
 	s := kexec.NewSegment(stackBuffer, kexec.Range{
-		Start: uintptr(hobAddr + tmpHobSize),
-		Size:  tmpStackSize,
+		Start: uintptr(hobAddr + tmpStackOffset),
+		Size:  pageSize,
 	})
 	mem.Segments.Insert(s)
 
@@ -389,7 +389,7 @@ func prepareBootEnv(hobAddr uint64, entry uint64, mem *kexec.Memory) error {
 	binary.Write(&buf, binary.LittleEndian, trampoline)
 
 	s = kexec.NewSegment(buf.Bytes(), kexec.Range{
-		Start: uintptr(hobAddr + tmpEntryOffset),
+		Start: uintptr(hobAddr + trampolineOffset),
 		Size:  uint(buf.Len()),
 	})
 
@@ -427,6 +427,25 @@ func prepareHob(buf *bytes.Buffer, len *uint64, addr uint64, mem *kexec.Memory) 
 }
 
 func prepareBootloaderParamter(fdtLoad *FdtLoad, loadAddr uint64, mem *kexec.Memory) error {
+	dtBuf := &bytes.Buffer{}
+
+	rdspdata, err := buildDeviceTreeInfo(dtBuf, mem, loadAddr)
+	if err != nil {
+		fmt.Printf("Failed to build fdt!!!\n")
+		return err
+	}
+
+	s := kexec.NewSegment(dtBuf.Bytes(), kexec.Range{
+		Start: uintptr(loadAddr),
+		Size:  uint(dtBuf.Len()),
+	})
+	mem.Segments.Insert(s)
+
+	s = kexec.NewSegment(rdspdata, kexec.Range{
+		Start: uintptr(loadAddr + rsdpTableOffset),
+		Size:  uint(len(rdspdata)),
+	})
+	mem.Segments.Insert(s)
 	hobBuf := &bytes.Buffer{}
 	hobListBuf := &bytes.Buffer{}
 	var hobLen uint64
@@ -439,8 +458,8 @@ func prepareBootloaderParamter(fdtLoad *FdtLoad, loadAddr uint64, mem *kexec.Mem
 		return err
 	}
 
-	s := kexec.NewSegment(hobListBuf.Bytes(), kexec.Range{
-		Start: uintptr(loadAddr),
+	s = kexec.NewSegment(hobListBuf.Bytes(), kexec.Range{
+		Start: uintptr(loadAddr + tmpHobOffset),
 		Size:  uint(hobListBuf.Len()),
 	})
 
@@ -466,10 +485,10 @@ func prepareFdtData(fdt *FdtLoad, data []byte, addr uint64, mem *kexec.Memory) e
 func loadKexecMemWithHOBs(fdt *FdtLoad, data []byte, mem *kexec.Memory) (uintptr, error) {
 	mmRanges := mem.Phys.RAM()
 
-	fitOffset := tmpHobSize + tmpStackSize + trampolineSize
-	rangeLen := fitOffset + len(data)
+	rangeLen := uplImageOffset + len(data)
 
-	// Try to find available Space to locate FIT image and HoB, stack and trampoline code.
+	// Try to find available Space to locate FIT image and HoB, stack and trampoline code,
+	// Device Tree information, and ACPI DATA.
 	// 2MB alignment will be easy for target OS/Bootloader to construct page table.
 	// The layout of this Space will be placed as following:
 	//
@@ -482,6 +501,10 @@ func loadKexecMemWithHOBs(fdt *FdtLoad, data []byte, mem *kexec.Memory) (uintptr
 	//  |------------------------|
 	//  |  BOOTLOADER PARAMETER  |
 	//  |------------------------|
+	//  |       ACPI DATA        |
+	//  |------------------------|
+	//  |    Device Tree Info    |
+	//  |------------------------|
 	//
 	kernelRange, err := mmRanges.FindSpace(uint(rangeLen), kexec.WithAlignment(0x200000))
 	if err != nil {
@@ -489,7 +512,7 @@ func loadKexecMemWithHOBs(fdt *FdtLoad, data []byte, mem *kexec.Memory) (uintptr
 	}
 
 	targetAddr := uint64(kernelRange.Start)
-	fitImgAddr := targetAddr + uint64(fitOffset)
+	fitImgAddr := targetAddr + uint64(uplImageOffset)
 
 	prepareFdtData(fdt, data, fitImgAddr, mem)
 
@@ -501,7 +524,7 @@ func loadKexecMemWithHOBs(fdt *FdtLoad, data []byte, mem *kexec.Memory) (uintptr
 		return 0, err
 	}
 
-	return (uintptr)(targetAddr + tmpEntryOffset), nil
+	return (uintptr)(targetAddr + trampolineOffset), nil
 }
 
 func Load(name string) error {
