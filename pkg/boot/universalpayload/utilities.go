@@ -16,7 +16,6 @@ import (
 	"os"
 	"regexp"
 	"strconv"
-	"reflect"
 	"unsafe"
 
 	"github.com/u-root/u-root/pkg/dt"
@@ -238,24 +237,14 @@ func alignHOBLength(expectLen uint64, bufLen int, buf *bytes.Buffer) error {
 // Also stack is prepared in trampoline code snippet to ensure no data leak.
 func constructTrampoline(buf []uint8, hobAddr uint64, entry uint64) []uint8 {
 	ptrToSlice := func(ptr uintptr, size int) []byte {
-		var data []byte
-	
-		sh := (*reflect.SliceHeader)(unsafe.Pointer(&data))
-		sh.Data = ptr
-		sh.Len = size
-		sh.Cap = size
-	
-		return data
+		return unsafe.Slice((*byte)(unsafe.Pointer(ptr)), size)
 	}
 
 	trampBegin := addrOfStart()
 	trampStack := addrOfStackTop()
 	trampHob := addrOfHobAddr()
 
-	if (trampHob - trampStack) != 0x20 {
-		fmt.Printf("Offset %x vs. %x mismatch is assembly code\n", trampHob-trampStack, 0x20)
-		return nil
-	}
+	padLen := uint64(trampHob - trampStack - 8)
 
 	tramp := ptrToSlice(trampBegin, int(trampStack-trampBegin))
 
@@ -268,14 +257,15 @@ func constructTrampoline(buf []uint8, hobAddr uint64, entry uint64) []uint8 {
 		return append(slice, tmpBytes...)
 	}
 
+	padWithLength := func(slice []uint8, len uint64) []uint8 {
+		tmpBytes := make([]uint8, len)
+		return append(slice, tmpBytes...)
+	}
+
 	buf = appendUint64(buf, stackTop)
-	buf = appendUint64(buf, 0x0)
-	buf = appendUint64(buf, 0x0)
-	buf = appendUint64(buf, 0x0)
+	buf = padWithLength(buf, padLen)
 	buf = appendUint64(buf, hobAddr)
-	buf = appendUint64(buf, 0x0)
-	buf = appendUint64(buf, 0x0)
-	buf = appendUint64(buf, 0x0)
+	buf = padWithLength(buf, padLen)
 	buf = appendUint64(buf, entry)
 
 	return buf
