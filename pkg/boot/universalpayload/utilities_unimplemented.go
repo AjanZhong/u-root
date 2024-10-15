@@ -1,0 +1,23 @@
+// Copyright 2024 the u-root Authors. All rights reserved
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+//go:build !amd64 && !arm64
+
+package universalpayload
+
+import (
+	"errors"
+)
+
+var (
+	ErrUnimplemented = errors.New("not implemented yet.")
+)
+
+func getPhysicalAddressSizes() (uint8, error) {
+	return 0, ErrUnimplemented
+}
+
+func constructTrampoline(buf []uint8, hobAddr uint64, entry uint64) []uint8 {
+	return nil
+}
