@@ -174,7 +174,7 @@ func run(args []string) error {
 	}
 
 	if err := universalpayload.Load(opts.kernelpath); err != nil {
-		log.Printf("Failed to load universalpayload, try legacy kernel..")
+		log.Printf("Failed to load universalpayload with error(%v), try legacy kernel..", err)
 	}
 
 	if opts.cmdline != "" && opts.reuseCmdline {

@@ -53,5 +53,6 @@ func getRSDPMem(start, end int64) (*RSDP, error) {
 // the e0000-ffff0 area, 16 bytes at a time, trying to find an RSDP.
 // These are well-known addresses for 20+ years.
 func GetRSDPMem() (*RSDP, error) {
+	fmt.Print("Try to scan RSDP from 0xe0000~0xffff0\n")
 	return getRSDPMem(0xe0000, 0xffff0)
 }
