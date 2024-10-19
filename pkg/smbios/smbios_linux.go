@@ -19,6 +19,7 @@ var systabPath = "/sys/firmware/efi/systab"
 func SMBIOSBaseEFI() (base int64, size int64, err error) {
 	file, err := os.Open(systabPath)
 	if err != nil {
+		fmt.Printf("SMBIOSBaseEFI: Failed to open /sys/firmware/efi/systab\n")
 		return 0, 0, err
 	}
 	defer file.Close()
@@ -36,16 +37,19 @@ func SMBIOSBaseEFI() (base int64, size int64, err error) {
 		if strings.HasPrefix(line, smbios3) {
 			start = strings.TrimPrefix(line, smbios3)
 			size = smbios3HeaderSize
+			fmt.Printf("SMBIOSBaseEFI: TYPE (%s) found, start:(%s)\n", smbios3, start)
 		}
 		if strings.HasPrefix(line, smbios) {
 			start = strings.TrimPrefix(line, smbios)
 			size = smbios2HeaderSize
+			fmt.Printf("SMBIOSBaseEFI: TYPE (%s) found, start:(%s)\n", smbios, start)
 		}
 		if start == "" {
 			continue
 		}
 		base, err := strconv.ParseInt(start, 0, 63)
 		if err != nil {
+			fmt.Printf("SMBIOSBaseEFI: failed to parse base string (%s) with error:%v\n", start, err)
 			continue
 		}
 		return base, size, nil
