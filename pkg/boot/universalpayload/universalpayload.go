@@ -163,43 +163,37 @@ func constructUniversalPayloadBase(addr uint64) *UniversalPayloadBase {
 
 // Construct UniversalPayloadAcpiTable HOB
 func constructRSDPTable() (*UniversalPayloadAcpiTable, error) {
-	fmt.Printf("constructRSDPTable: getAcpiRSDP\n")
-	rsdp, err := getAcpiRSDP()
-	if err != nil {
-		return nil, errors.Join(ErrFailToGetRSDPTable, err)
-	}
-
-	fmt.Printf("constructRSDPTable: succeed to getAcpiRSDP\n")
-
-	//fmt.Printf("constructRSDPTable: Using Hard Code RSDP table address:%x\n", RSDPTableAddr)
+	//fmt.Printf("constructRSDPTable: getAcpiRSDP\n")
+	//rsdp, err := getAcpiRSDP()
+	//if err != nil {
+	//	return nil, errors.Join(ErrFailToGetRSDPTable, err)
+	//}
+	//fmt.Printf("constructRSDPTable: succeed to getAcpiRSDP\n")
+	fmt.Printf("constructRSDPTable: Using Hard Code RSDP table address:%x\n", RSDPTableAddr)
 	return &UniversalPayloadAcpiTable{
 		Header: UniversalPayloadGenericHeader{
 			Revision: UniversalPayloadAcpiTableRevision,
 			Length:   uint16(unsafe.Sizeof(UniversalPayloadAcpiTable{})),
 		},
-		Rsdp: EFIPhysicalAddress(rsdp.RSDPAddr()),
-		//Rsdp: EFIPhysicalAddress(RSDPTableAddr),
+		//Rsdp: EFIPhysicalAddress(rsdp.RSDPAddr()),
+		Rsdp: EFIPhysicalAddress(RSDPTableAddr),
 	}, nil
 }
 
 // Construct UniversalPayloadSmbiosTable HOB
 func constructSmbiosTable() (*UniversalPayloadSmbiosTable, error) {
-	smbiosTableBase, _, err := getSMBIOSBase()
-	if err != nil {
-		return nil, errors.Join(ErrFailToGetSmbiosTable, err)
-	}
-
-	fmt.Printf("constructSmbiosTable: succeed to getSMBIOSBase\n")
-
-	//fmt.Printf("constructSmbiosTable: Using Hard Code SMBIOS table address:%x\n", SMBIOSTableAddr)
-
+	//smbiosTableBase, _, err := getSMBIOSBase()
+	//if err != nil {
+	//	return nil, errors.Join(ErrFailToGetSmbiosTable, err)
+	//}
+	fmt.Printf("constructSmbiosTable: Using Hard Code SMBIOS table address:%x\n", SMBIOSTableAddr)
 	return &UniversalPayloadSmbiosTable{
 		Header: UniversalPayloadGenericHeader{
 			Revision: UniversalPayloadSmbiosTableRevision,
 			Length:   uint16(unsafe.Sizeof(UniversalPayloadSmbiosTable{})),
 		},
-		SmBiosEntryPoint: EFIPhysicalAddress(smbiosTableBase),
-		//SmBiosEntryPoint: EFIPhysicalAddress(SMBIOSTableAddr),
+		//SmBiosEntryPoint: EFIPhysicalAddress(smbiosTableBase),
+		SmBiosEntryPoint: EFIPhysicalAddress(SMBIOSTableAddr),
 	}, nil
 }
 

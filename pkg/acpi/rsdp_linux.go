@@ -17,7 +17,6 @@ import (
 func GetRSDPEFI() (*RSDP, error) {
 	file, err := os.Open("/sys/firmware/efi/systab")
 	if err != nil {
-		fmt.Printf("GetRSDPEFI: Failed to open /sys/firmware/efi/systab\n")
 		return nil, err
 	}
 	defer file.Close()
@@ -33,23 +32,19 @@ func GetRSDPEFI() (*RSDP, error) {
 		start := ""
 		if strings.HasPrefix(line, acpi20) {
 			start = strings.TrimPrefix(line, acpi20)
-			fmt.Printf("GetRSDPEFI: TYPE (%s) found, start:(%s)\n", acpi20, start)
 		}
 		if strings.HasPrefix(line, acpi) {
 			start = strings.TrimPrefix(line, acpi)
-			fmt.Printf("GetRSDPEFI: TYPE (%s) found, start:(%s)\n", acpi20, start)
 		}
 		if start == "" {
 			continue
 		}
 		base, err := strconv.ParseInt(start, 0, 63)
 		if err != nil {
-			fmt.Printf("GetRSDPEFI: failed to parse base string (%s) with error:%v\n", start, err)
 			continue
 		}
 		rsdp, err := readRSDP(base)
 		if err != nil {
-			fmt.Printf("GetRSDPEFI: failed to read RSDP at base(%x) with error:%v\n", base, err)
 			continue
 		}
 		return rsdp, nil
