@@ -160,6 +160,45 @@ const (
 
 type EFIMemoryMapHOB []EFIHOBResourceDescriptor
 
+type EfiPixelBitmask struct {
+	RedMask      uint32
+	GreenMask    uint32
+	BlueMask     uint32
+	ReservedMask uint32
+}
+
+const (
+	PixelRedGreenBlueReserved8BitPerColor uint32 = iota
+	PixelBlueGreenRedReserved8BitPerColor
+	PixelBitMask
+	PixelBltOnly
+	PixelFormatMax
+)
+
+type EfiGraphicOutpuModeInfo struct {
+	Version              uint32
+	HorizontalResolution uint32
+	VerticalResolution   uint32
+	PixelFormat          uint32
+	PixelInformation     EfiPixelBitmask
+	PixelsPerScanLine    uint32
+}
+
+type EfiPeiGraphicInfoHob struct {
+	FrameBufferBase uint64
+	FrameBufferSize uint32
+	GraphicsMode    EfiGraphicOutpuModeInfo
+}
+
+type EfiPeiGraphicDeviceInfoHob struct {
+	VendorId          uint16
+	DeviceId          uint16
+	SubsystemVendorId uint16
+	SubsystemId       uint16
+	RevisionId        uint8
+	BarIndex          uint8
+}
+
 // Translate System Map with "System RAM" type to Resource code HOBs.
 func hobFromMemMap(memMap kexec.MemoryMap) (EFIMemoryMapHOB, uint64) {
 	var memMapHOB EFIMemoryMapHOB
@@ -237,4 +276,24 @@ func hobCreateEFIHOBCPU() (*EFIHOBCPU, error) {
 		SizeOfMemorySpace: phyAddrSize,
 		SizeOfIOSpace:     DefaultIOAddressSize,
 	}, nil
+}
+
+func hobCreateGfxHobInfo() (*EfiPeiGraphicInfoHob, error) {
+	gfxInfo, err := constructFbScreenInfo()
+	if err != nil {
+		return nil, err
+	}
+
+	return gfxInfo, nil
+
+}
+
+func hobCreateGfxDevHobInfo() (*EfiPeiGraphicDeviceInfoHob, error) {
+	gfxInfo, err := constructGfxDevInfo()
+	if err != nil {
+		return nil, err
+	}
+
+	return gfxInfo, nil
+
 }

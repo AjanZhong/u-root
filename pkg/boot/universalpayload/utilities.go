@@ -12,6 +12,9 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
+	"syscall"
+	"unsafe"
 
 	"github.com/u-root/u-root/pkg/dt"
 )
@@ -46,6 +49,70 @@ type FdtLoad struct {
 	EntryStart uint64
 	DataOffset uint32
 	DataSize   uint32
+}
+
+const sysfsFbPath = "/dev/fb0"
+
+type FbBitfield struct {
+	Offset   uint32 // beginning of bitfield
+	Length   uint32 // length of bitfield
+	MsbRight uint32 // != 0 : Most significant bit is right
+}
+
+// Definitions for ioctl and framebuffer structures in Go
+const (
+	FbIotclVscreeninfo    = 0x4600
+	FbIoctlGetFscreenInfo = 0x4602
+)
+
+type FbVarScreenInfo struct {
+	Xres         uint32
+	Yres         uint32
+	XresVirtual  uint32
+	YresVirtual  uint32
+	Xoffset      uint32
+	Yoffset      uint32
+	BitsPerPixel uint32
+	Grayscale    uint32
+	Red          FbBitfield
+	Green        FbBitfield
+	Blue         FbBitfield
+	Transp       FbBitfield
+	Nonstd       uint32
+	Activate     uint32
+	Height       uint32
+	Width        uint32
+	AccelFlags   uint32
+	PixClock     uint32
+	LeftMargin   uint32
+	RightMargin  uint32
+	UpperMargin  uint32
+	LowerMargin  uint32
+	HsyncLen     uint32
+	VsyncLen     uint32
+	Sync         uint32
+	Vmode        uint32
+	Rotate       uint32
+	Colorspace   uint32
+	Reserved     [4]uint32
+}
+
+type FbFixScreenInfo struct {
+	ID           [16]byte
+	SmemStart    uint64
+	SmemLen      uint32
+	Type         uint32
+	TypeAux      uint32
+	Visual       uint32
+	Xpanstep     uint16
+	Ypanstep     uint16
+	Ywrapstep    uint16
+	LineLength   uint32
+	MmioStart    uint64
+	MmioLen      uint32
+	Accel        uint32
+	Capabilities uint16
+	Reserved     [2]uint16
 }
 
 // Errors returned by utilities
@@ -271,4 +338,66 @@ func relocateFdtData(dst uint64, fdtLoad *FdtLoad, data []byte) error {
 	fdtLoad.Load = dst
 
 	return nil
+}
+
+func constructFbScreenInfo() (*EfiPeiGraphicInfoHob, error) {
+	// Open the framebuffer device
+	fb, err := os.Open(sysfsFbPath)
+	if err != nil {
+		fmt.Printf("Error opening framebuffer device: %v\n", err)
+		return nil, err
+	}
+
+	// Get variable screen info
+	var vinfo FbVarScreenInfo
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fb.Fd(), FbIotclVscreeninfo, uintptr(unsafe.Pointer(&vinfo)))
+	if errno != 0 {
+		fmt.Printf("Error getting variable screen info: %v\n", errno)
+		return nil, err
+	}
+
+	// Get fixed screen info
+	var finfo FbFixScreenInfo
+	_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, fb.Fd(), FbIoctlGetFscreenInfo, uintptr(unsafe.Pointer(&finfo)))
+	if errno != 0 {
+		fmt.Printf("Error getting fixed screen info: %v\n", errno)
+		return nil, err
+	}
+
+	fb.Close()
+
+	format := PixelRedGreenBlueReserved8BitPerColor
+	if vinfo.Red.Offset == 16 && vinfo.Green.Offset == 8 && vinfo.Blue.Offset == 0 {
+		format = PixelBlueGreenRedReserved8BitPerColor
+	}
+
+	return &EfiPeiGraphicInfoHob{
+		FrameBufferBase: finfo.SmemStart,
+		FrameBufferSize: finfo.SmemLen,
+		GraphicsMode: EfiGraphicOutpuModeInfo{
+			Version:              0,
+			HorizontalResolution: vinfo.Xres,
+			VerticalResolution:   vinfo.Yres,
+			PixelFormat:          format,
+			PixelInformation: EfiPixelBitmask{
+				RedMask:      ((1 << vinfo.Red.Length) - 1) << vinfo.Red.Offset,
+				GreenMask:    ((1 << vinfo.Green.Length) - 1) << vinfo.Green.Offset,
+				BlueMask:     ((1 << vinfo.Blue.Length) - 1) << vinfo.Blue.Offset,
+				ReservedMask: ((1 << vinfo.Transp.Length) - 1) << vinfo.Transp.Offset,
+			},
+			PixelsPerScanLine: finfo.LineLength / ((vinfo.BitsPerPixel + 7) / 8),
+		},
+	}, nil
+}
+
+func constructGfxDevInfo() (*EfiPeiGraphicDeviceInfoHob, error) {
+
+	return &EfiPeiGraphicDeviceInfoHob{
+		VendorId:          0x1234,
+		DeviceId:          0x1111,
+		SubsystemVendorId: 0x1af4,
+		SubsystemId:       0x1100,
+		RevisionId:        0x0,
+		BarIndex:          0x0,
+	}, nil
 }

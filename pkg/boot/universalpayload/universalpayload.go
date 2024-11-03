@@ -47,6 +47,13 @@ const (
 )
 
 const (
+	//EFIGraphicsInfoHobGUID = { 0x39f62cce, 0x6825, 0x4669, { 0xbb, 0x56, 0x54, 0x1a, 0xba, 0x75, 0x3a, 0x07 }};
+	EFIGraphicsInfoHobGUID = "ce2cf639-2568-6946-bb56-541aba753a07"
+	//EFIGraphicsDeviceInfoHobGUID = {0xe5cb2ac9, 0xd35d, 0x4430, { 0x93, 0x6e, 0x1d, 0xe3, 0x32, 0x47, 0x8d, 0xe7 }};
+	EFIGraphicsDeviceInfoHobGUID = "c92acbe5-5dd3-3044-936e-1de332478de7"
+)
+
+const (
 	RSDPTableAddr   = 0xF472F018
 	SMBIOSTableAddr = 0xF7E90000
 )
@@ -98,6 +105,8 @@ var (
 		UniversalPayloadBaseGUID:           unsafe.Sizeof(UniversalPayloadBase{}),
 		UniversalPayloadAcpiTableGUID:      unsafe.Sizeof(UniversalPayloadAcpiTable{}),
 		UniversalPayloadSmbiosTableGUID:    unsafe.Sizeof(UniversalPayloadSmbiosTable{}),
+		EFIGraphicsInfoHobGUID:             unsafe.Sizeof(EfiPeiGraphicInfoHob{}),
+		EFIGraphicsDeviceInfoHobGUID:       unsafe.Sizeof(EfiPeiGraphicDeviceInfoHob{}),
 	}
 )
 
@@ -336,6 +345,74 @@ func appendSmbiosTableHOB(buf *bytes.Buffer, hobLen *uint64) error {
 	return nil
 }
 
+func appendGraphicInfoHob(buf *bytes.Buffer, hobLen *uint64) error {
+	// Construct SMBIOS Hob
+	gfxInfo, err := hobCreateGfxHobInfo()
+	if err != nil {
+		fmt.Printf("failed to hobCreateGfxHobInfo\n")
+		return err
+	}
+
+	gfxInfoGUIDHob, err := constructGUIDHOB(EFIGraphicsInfoHobGUID)
+	if err != nil {
+		fmt.Printf("failed to hobCreateGfxHobInfo\n")
+		return err
+	}
+
+	length := uint64(unsafe.Sizeof(EFIHOBGUIDType{}) + unsafe.Sizeof(EfiPeiGraphicInfoHob{}))
+	prev := buf.Len()
+
+	if err := binary.Write(buf, binary.LittleEndian, gfxInfoGUIDHob); err != nil {
+		return fmt.Errorf("failed to append gfx info table guid to buffer")
+	}
+
+	if err := binary.Write(buf, binary.LittleEndian, gfxInfo); err != nil {
+		return fmt.Errorf("failed to append gfx info table to buffer")
+	}
+
+	if err := alignHOBLength(length, buf.Len()-prev, buf); err != nil {
+		return fmt.Errorf("%w, func = appendGraphicInfoHob()", ErrWriteHOBLengthNotMatch)
+	}
+
+	*hobLen += length
+
+	return nil
+}
+
+func appendGraphicDeviceInfoHob(buf *bytes.Buffer, hobLen *uint64) error {
+	// Construct SMBIOS Hob
+	gfxDevInfo, err := hobCreateGfxDevHobInfo()
+	if err != nil {
+		fmt.Printf("failed to hobCreateGfxHobInfo\n")
+		return err
+	}
+
+	gfxDevInfoGUIDHob, err := constructGUIDHOB(EFIGraphicsDeviceInfoHobGUID)
+	if err != nil {
+		fmt.Printf("failed to hobCreateGfxHobInfo\n")
+		return err
+	}
+
+	length := uint64(unsafe.Sizeof(EFIHOBGUIDType{}) + unsafe.Sizeof(EfiPeiGraphicDeviceInfoHob{}))
+	prev := buf.Len()
+
+	if err := binary.Write(buf, binary.LittleEndian, gfxDevInfoGUIDHob); err != nil {
+		return fmt.Errorf("failed to append gfx dev info guid to buffer")
+	}
+
+	if err := binary.Write(buf, binary.LittleEndian, gfxDevInfo); err != nil {
+		return fmt.Errorf("failed to append gfx dev info to buffer")
+	}
+
+	if err := alignHOBLength(length, buf.Len()-prev, buf); err != nil {
+		return fmt.Errorf("%w, func = appendGraphicDeviceInfoHob()", ErrWriteHOBLengthNotMatch)
+	}
+
+	*hobLen += length
+
+	return nil
+}
+
 func appendEFICPUHOB(buf *bytes.Buffer, hobLen *uint64) error {
 	cpuHOB, err := hobCreateEFIHOBCPU()
 	if err != nil {
@@ -437,6 +514,18 @@ func prepareHob(buf *bytes.Buffer, len *uint64, addr uint64, mem *kexec.Memory) 
 	if err := appendSmbiosTableHOB(buf, len); err != nil {
 		fmt.Printf("prepareHob: Failed to appendSmbiosTableHOB with error:%v\n", err)
 		return err
+	}
+
+	fmt.Printf("prepareHob: Try to appendGraphicInfoHob\n")
+	if err := appendGraphicInfoHob(buf, len); err != nil {
+		fmt.Printf("prepareHob: Failed to appendGraphicInfoHob with error:%v\n", err)
+		return nil
+	}
+
+	fmt.Printf("prepareHob: Try to appendGraphicDeviceInfoHob\n")
+	if err := appendGraphicDeviceInfoHob(buf, len); err != nil {
+		fmt.Printf("prepareHob: Failed to appendGraphicDeviceInfoHob with error:%v\n", err)
+		return nil
 	}
 
 	fmt.Printf("prepareHob: Try to appendEFICPUHOB\n")
