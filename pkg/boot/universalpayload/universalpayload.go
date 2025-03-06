@@ -10,11 +10,14 @@
 package universalpayload
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"unsafe"
 
 	guid "github.com/google/uuid"
@@ -43,6 +46,10 @@ const (
 const (
 	UniversalPayloadSmbiosTableGUID     = "260d0a59-e506-204d-8a82-59ea1b34982d"
 	UniversalPayloadSmbiosTableRevision = 1
+)
+
+const (
+	UniversalPayloadGICRBaseGUID = "eba854ee-f9fe-6b48-bcff-5048560cd271"
 )
 
 var (
@@ -83,6 +90,11 @@ type UniversalPayloadSmbiosTable struct {
 	SmBiosEntryPoint EFIPhysicalAddress
 }
 
+type UniversalPayloadGICRBase struct {
+	Header      UniversalPayloadGenericHeader
+	ArmGICRBase EFIPhysicalAddress
+}
+
 // Map GUID string to size of corresponding structure. Use
 // this map to simplify the length calculation in function
 // constructGUIDHOB.
@@ -92,6 +104,7 @@ var (
 		UniversalPayloadBaseGUID:           unsafe.Sizeof(UniversalPayloadBase{}),
 		UniversalPayloadAcpiTableGUID:      unsafe.Sizeof(UniversalPayloadAcpiTable{}),
 		UniversalPayloadSmbiosTableGUID:    unsafe.Sizeof(UniversalPayloadSmbiosTable{}),
+		UniversalPayloadGICRBaseGUID:       unsafe.Sizeof(UniversalPayloadGICRBase{}),
 	}
 )
 
@@ -102,6 +115,7 @@ var (
 	ErrWriteHOBBufSerialPort           = errors.New("failed to append serial port hob to buffer")
 	ErrWriteHOBBufUniversalPayloadBase = errors.New("failed to append universal payload base to buffer")
 	ErrWriteHOBBufAcpiTable            = errors.New("failed to append acpi table to buffer")
+	ErrWriteHOBBufGICRBase             = errors.New("failed to append GICR Base to buffer")
 	ErrWriteHOBSmbiosTable             = errors.New("failed to append smbios table to buffer")
 	ErrWriteHOBEFICPU                  = errors.New("failed to append CPU HOB to buffer")
 	ErrWriteHOBBufList                 = errors.New("failed to append HOB list to buffer")
@@ -167,6 +181,47 @@ func constructSmbiosTable() (*UniversalPayloadSmbiosTable, error) {
 			Length:   uint16(unsafe.Sizeof(UniversalPayloadSmbiosTable{})),
 		},
 		SmBiosEntryPoint: EFIPhysicalAddress(smbiosTableBase),
+	}, nil
+}
+
+// Construct GIC Redistributor Base HOB
+func constructGICRBase() (*UniversalPayloadGICRBase, error) {
+	f, err := os.Open("/proc/iomem")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var GICRBase uint64
+	b := bufio.NewScanner(f)
+	for b.Scan() {
+		content := b.Text()
+
+		if strings.Contains(content, "GICR") {
+			els := strings.Split(content, ":")
+			addrs := strings.Split(strings.TrimSpace(els[0]), "-")
+			if len(addrs) != 2 {
+				fmt.Printf("Address format incorrect for device 'GIC Redistributor Base'\n")
+				continue
+			}
+
+			GICRBase, err = strconv.ParseUint(addrs[0], 16, 64)
+			if err != nil {
+				fmt.Printf("Failed to parse start address for device 'GIC Redistributor Base'\n")
+				continue
+			}
+
+			fmt.Printf("=======DEBUG====: GICR Base found:%x\n", GICRBase)
+			break
+		}
+	}
+
+	return &UniversalPayloadGICRBase{
+		Header: UniversalPayloadGenericHeader{
+			Revision: 0xF1,
+			Length:   uint16(unsafe.Sizeof(UniversalPayloadGICRBase{})),
+		},
+		ArmGICRBase: EFIPhysicalAddress(GICRBase),
 	}, nil
 }
 
@@ -295,6 +350,39 @@ func appendEFICPUHOB(buf *bytes.Buffer, hobLen *uint64) error {
 	return nil
 }
 
+// Construct serial port HOB
+func appendGICRBaseHOB(buf *bytes.Buffer, hobLen *uint64) error {
+	gicrBase, err := constructGICRBase()
+	if err != nil {
+		fmt.Printf("appendGICRBaseHOB failed with err:%v\n", err)
+		return err
+	}
+
+	gicrBaseGUIDHob, err := constructGUIDHOB(UniversalPayloadGICRBaseGUID)
+	if err != nil {
+		return err
+	}
+
+	length := uint64(unsafe.Sizeof(EFIHOBGUIDType{}) + unsafe.Sizeof(UniversalPayloadGICRBase{}))
+	prev := buf.Len()
+
+	if err := binary.Write(buf, binary.LittleEndian, gicrBaseGUIDHob); err != nil {
+		return errors.Join(ErrWriteHOBBufGICRBase, err)
+	}
+
+	if err := binary.Write(buf, binary.LittleEndian, gicrBase); err != nil {
+		return errors.Join(ErrWriteHOBBufGICRBase, err)
+	}
+
+	if err := alignHOBLength(length, buf.Len()-prev, buf); err != nil {
+		return errors.Join(ErrWriteHOBLengthNotMatch, err)
+	}
+
+	*hobLen += length
+
+	return nil
+}
+
 func constructHOBList(dst *bytes.Buffer, src *bytes.Buffer, hobLen *uint64) error {
 	handoffHOB := hobCreateEFIHOBHandoffInfoTable(*hobLen)
 	if err := binary.Write(dst, binary.LittleEndian, handoffHOB); err != nil {
@@ -365,6 +453,10 @@ func prepareHob(buf *bytes.Buffer, length *uint64, addr uint64, mem *kexec.Memor
 	}
 
 	if err := appendEFICPUHOB(buf, length); err != nil {
+		return err
+	}
+
+	if err := appendGICRBaseHOB(buf, length); err != nil {
 		return err
 	}
 
