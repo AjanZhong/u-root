@@ -177,6 +177,12 @@ func hobFromMemMap(memMap kexec.MemoryMap) (EFIMemoryMapHOB, uint64) {
 			continue
 		}
 
+		// Try to skip IB (InfiniBand NIC) mlx5_core, since it overlaps with
+		// PCI ROOT bridge window.
+		if strings.Contains(memType, "mlx5_core") {
+			continue
+		}
+
 		if memType == kexec.RangeRAM.String() {
 			resourceType = EFIResourceSystemMemory
 		} else if memType == kexec.RangeReserved.String() {
