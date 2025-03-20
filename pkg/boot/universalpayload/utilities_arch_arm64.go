@@ -26,7 +26,7 @@ func addrOfHobAddr() uintptr
 func getPhysicalAddressSizes() (uint8, error) {
 	// Return hardcode for arm64
 	// Please update to actual physical address size
-	return 44, nil
+	return 52, nil
 }
 
 // Construct trampoline code before jump to entry point of FIT image.
