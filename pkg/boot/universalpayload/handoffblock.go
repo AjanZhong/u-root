@@ -170,26 +170,16 @@ func hobFromMemMap(memMap kexec.MemoryMap) (EFIMemoryMapHOB, uint64) {
 	for _, entry := range memMap {
 
 		memType := strings.TrimSpace(string(entry.Type))
-
-		// Skip resource region of PCI Bus. UniversalPayload utilizes its own
-		// PciHostBridgeDxe to enumerate all Root Bridges in PCI Bus.
-		if strings.Contains(memType, "PCI Bus") {
-			continue
-		}
-
-		// Try to skip IB (InfiniBand NIC) mlx5_core, since it overlaps with
-		// PCI ROOT bridge window.
-		if strings.Contains(memType, "mlx5_core") {
-			continue
-		}
-
-		if memType == kexec.RangeRAM.String() {
-			resourceType = EFIResourceSystemMemory
-		} else if memType == kexec.RangeReserved.String() {
+		if memType == kexec.RangeReserved.String() {
 			resourceType = EFIResourceMemoryReserved
 		} else {
-			// Treat all other types to be mapped device MMIO address
-			resourceType = EFIResourceMemoryMappedIO
+			if strings.Contains(memType, "GICD") ||
+				strings.Contains(memType, "GICR") ||
+				strings.Contains(memType, "PCI ECAM") {
+				resourceType = EFIResourceMemoryMappedIO
+			} else {
+				continue
+			}
 		}
 
 		memMapHOB = append(memMapHOB, EFIHOBResourceDescriptor{
