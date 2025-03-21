@@ -616,6 +616,256 @@ func constructSerialPortNode() *dt.Node {
 	))
 }
 
+func buildRootBridgeNodes() []*dt.Node {
+	var rbNodes []*dt.Node
+
+	/* SAMPLE NODE FOR QEMU AARCH64
+	rbNode := dt.NewNode("pci-rb", dt.WithProperty(
+		dt.PropertyString("compatible", "pci-rb"),
+		dt.PropertyU64("reg", 0x4010000000),
+		dt.PropertyU32Array("bus-range", []uint32{0x0, 0xFF}),
+		// property "ranges":
+		// Array definition: each range takes 7 * 32bits
+		// 0: TYPE(64BITS: bit24 + bit25, 32BITS: bit25, IO: bit24)
+		// 1: High 32bits base address of 64BITS or useless for both 32BITS and IO
+		// 2: Low 32bits base address of 64BITS or base address for both 32BITS and IO
+		// 3-4: ignored
+		// 5: High 32bits size of 64BITS or useless for both 32BITS and IO
+		// 6: Low 32bits size address of 64BITS or base address for both 32BITS and IO
+		// sample code:
+		// 64BITS: [0x80_0000_0000, 0x80_0040_3FFF]
+		// 32BITS: [0x1000_0000, 0x1145_3FFF]
+		// IO: [0x1000, 0x301F]
+
+		dt.PropertyU32Array("ranges", []uint32{
+			0x300_0000, 0x80, 0x0, 0x0, 0x0, 0x80, 0x0, // 64BITS
+			0x200_0000, 0x0, 0x1000_0000, 0x0, 0x0, 0x0, 0x2EFF_0000, // 32BITS
+			0x100_0000, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1_0000, // IO
+		}),
+	))
+	*/
+
+	// Please check with Linuxboot kernel log
+
+	// acpi PNP0A08:00: ECAM area [mem 0x600010000000-0x60001fffffff] reserved by PNP0C02:02
+	// pci_bus 0000:00: root bus resource [mem 0x600040000000-0x6000bfffffff window]
+	// (bus address [0x40000000-0xbfffffff])
+	// pci_bus 0000:00: root bus resource [mem 0x6000c0000000-0x607fffffffff window]
+	// pci_bus 0000:00: root bus resource [io 0x0000-0xffff window]
+	// pci_bus 0000:00: root bus resource [bus 00-ff]
+	rbNode := dt.NewNode("pci-rb", dt.WithProperty(
+		dt.PropertyString("compatible", "pci-rb"),
+		dt.PropertyU64("reg", 0x6000_1000_0000),
+		dt.PropertyU32Array("bus-range", []uint32{0x0, 0xFF}),
+		dt.PropertyU32Array("ranges", []uint32{
+			0x300_0000, 0x6000, 0xC000_0000, 0x0, 0x0, 0x7F, 0x4000_0000, // 64BITS
+			0x200_0000, 0x0, 0x4000_0000, 0x0, 0x0, 0x0, 0x8000_0000, // 32BITS
+			0x100_0000, 0x0, 0x0, 0x0, 0x0, 0x0, 0x1_0000, // IO
+		}),
+	))
+	rbNodes = append(rbNodes, rbNode)
+
+	// acpi PNP0A08:01: ECAM area [mem 0x610010000000-0x61001fffffff] reserved by PNP0C02:03
+	// pci_bus 0002:00: root bus resource [mem 0x610040000000-0x6100bfffffff window]
+	// (bus address [0x40000000-0xbfffffff])
+	// pci_bus 0002:00: root bus resource [mem 0x6100c0000000-0x617fffffffff window]
+	// pci_bus 0002:00: root bus resource [io 0x10000-0x1ffff window] (bus address [0x0000-0xffff])
+	// pci_bus 0002:00: root bus resource [bus 00-ff]
+	rbNode = dt.NewNode("pci-rb", dt.WithProperty(
+		dt.PropertyString("compatible", "pci-rb"),
+		dt.PropertyU64("reg", 0x6100_1000_0000),
+		dt.PropertyU32Array("bus-range", []uint32{0x0, 0xFF}),
+		dt.PropertyU32Array("ranges", []uint32{
+			0x300_0000, 0x6100, 0xC000_0000, 0x0, 0x0, 0x7F, 0x4000_0000, // 64BITS
+			0x200_0000, 0x0, 0x4000_0000, 0x0, 0x0, 0x0, 0x8000_0000, // 32BITS
+			0x100_0000, 0x0, 0x0, 0x1_0000, 0x0, 0x0, 0x1_0000, // IO
+		}),
+	))
+	rbNodes = append(rbNodes, rbNode)
+
+	// acpi PNP0A08:02: ECAM area [mem 0x628010000000-0x62801fffffff] reserved by PNP0C02:04
+	// pci_bus 0005:00: root bus resource [mem 0x628040000000-0x6280bfffffff window]
+	// (bus address [0x40000000-0xbfffffff])
+	// pci_bus 0005:00: root bus resource [mem 0x6280c0000000-0x62ffffffffff window]
+	// pci_bus 0005:00: root bus resource [io 0x20000-0x2ffff window] (bus address [0x0000-0xffff])
+	// pci_bus 0005:00: root bus resource [bus 00-ff]
+	rbNode = dt.NewNode("pci-rb", dt.WithProperty(
+		dt.PropertyString("compatible", "pci-rb"),
+		dt.PropertyU64("reg", 0x6280_1000_0000),
+		dt.PropertyU32Array("bus-range", []uint32{0x0, 0xFF}),
+		dt.PropertyU32Array("ranges", []uint32{
+			0x300_0000, 0x6280, 0xC000_0000, 0x0, 0x0, 0x7F, 0x4000_0000, // 64BITS
+			0x200_0000, 0x0, 0x4000_0000, 0x0, 0x0, 0x0, 0x8000_0000, // 32BITS
+			0x100_0000, 0x0, 0x0, 0x2_0000, 0x0, 0x0, 0x1_0000, // IO
+		}),
+	))
+	rbNodes = append(rbNodes, rbNode)
+
+	// acpi PNP0A08:03: ECAM area [mem 0x630010000000-0x63001fffffff] reserved by PNP0C02:05
+	// pci_bus 0006:00: root bus resource [mem 0x630040000000-0x6300bfffffff window]
+	// (bus address [0x40000000-0xbfffffff])
+	// pci_bus 0006:00: root bus resource [mem 0x6300c0000000-0x63ffffffffff window]
+	// pci_bus 0006:00: root bus resource [io 0x30000-0x3ffff window] (bus address [0x0000-0xffff])
+	// pci_bus 0006:00: root bus resource [bus 00-ff]
+	rbNode = dt.NewNode("pci-rb", dt.WithProperty(
+		dt.PropertyString("compatible", "pci-rb"),
+		dt.PropertyU64("reg", 0x6300_1000_0000),
+		dt.PropertyU32Array("bus-range", []uint32{0x0, 0xFF}),
+		dt.PropertyU32Array("ranges", []uint32{
+			0x300_0000, 0x6300, 0xC000_0000, 0x0, 0x0, 0xFF, 0x4000_0000, // 64BITS
+			0x200_0000, 0x0, 0x4000_0000, 0x0, 0x0, 0x0, 0x8000_0000, // 32BITS
+			0x100_0000, 0x0, 0x0, 0x3_0000, 0x0, 0x0, 0x1_0000, // IO
+		}),
+	))
+	rbNodes = append(rbNodes, rbNode)
+
+	// acpi PNP0A08:04: ECAM area [mem 0x650010000000-0x65001fffffff] reserved by PNP0C02:06
+	// pci_bus 0008:00: root bus resource [mem 0x650040000000-0x6500bfffffff window]
+	// (bus address [0x40000000-0xbfffffff])
+	// pci_bus 0008:00: root bus resource [mem 0x6500c0000000-0x65ffffffffff window]
+	// pci_bus 0008:00: root bus resource [io 0x40000-0x4ffff window] (bus address [0x0000-0xffff])
+	// pci_bus 0008:00: root bus resource [bus 00-ff]
+	rbNode = dt.NewNode("pci-rb", dt.WithProperty(
+		dt.PropertyString("compatible", "pci-rb"),
+		dt.PropertyU64("reg", 0x6500_1000_0000),
+		dt.PropertyU32Array("bus-range", []uint32{0x0, 0xFF}),
+		dt.PropertyU32Array("ranges", []uint32{
+			0x300_0000, 0x6500, 0xC000_0000, 0x0, 0x0, 0xFF, 0x4000_0000, // 64BITS
+			0x200_0000, 0x0, 0x4000_0000, 0x0, 0x0, 0x0, 0x8000_0000, // 32BITS
+			0x100_0000, 0x0, 0x0, 0x4_0000, 0x0, 0x0, 0x1_0000, // IO
+		}),
+	))
+	rbNodes = append(rbNodes, rbNode)
+
+	// acpi PNP0A08:05: ECAM area [mem 0x660010000000-0x66001fffffff] reserved by PNP0C02:07
+	// pci_bus 0009:00: root bus resource [mem 0x660040000000-0x6600bfffffff window]
+	// (bus address [0x40000000-0xbfffffff])
+	// pci_bus 0009:00: root bus resource [mem 0x6600c0000000-0x66ffffffffff window]
+	// pci_bus 0009:00: root bus resource [io 0x50000-0x5ffff window] (bus address [0x0000-0xffff])
+	// pci_bus 0009:00: root bus resource [bus 00-ff]
+	rbNode = dt.NewNode("pci-rb", dt.WithProperty(
+		dt.PropertyString("compatible", "pci-rb"),
+		dt.PropertyU64("reg", 0x6600_1000_0000),
+		dt.PropertyU32Array("bus-range", []uint32{0x0, 0xFF}),
+		dt.PropertyU32Array("ranges", []uint32{
+			0x300_0000, 0x6600, 0xC000_0000, 0x0, 0x0, 0xFF, 0x4000_0000, // 64BITS
+			0x200_0000, 0x0, 0x4000_0000, 0x0, 0x0, 0x0, 0x8000_0000, // 32BITS
+			0x100_0000, 0x0, 0x0, 0x5_0000, 0x0, 0x0, 0x1_0000, // IO
+		}),
+	))
+	rbNodes = append(rbNodes, rbNode)
+
+	// acpi PNP0A08:06: ECAM area [mem 0x680010000000-0x68001fffffff] reserved by PNP0C02:08
+	// pci_bus 0010:00: root bus resource [mem 0x680040000000-0x6800bfffffff window]
+	// (bus address [0x40000000-0xbfffffff])
+	// pci_bus 0010:00: root bus resource [mem 0x6800c0000000-0x687fffffffff window]
+	// pci_bus 0010:00: root bus resource [io 0x60000-0x6ffff window] (bus address [0x0000-0xffff])
+	// pci_bus 0010:00: root bus resource [bus 00-ff]
+	rbNode = dt.NewNode("pci-rb", dt.WithProperty(
+		dt.PropertyString("compatible", "pci-rb"),
+		dt.PropertyU64("reg", 0x6800_1000_0000),
+		dt.PropertyU32Array("bus-range", []uint32{0x0, 0xFF}),
+		dt.PropertyU32Array("ranges", []uint32{
+			0x300_0000, 0x6800, 0xC000_0000, 0x0, 0x0, 0x7F, 0x4000_0000, // 64BITS
+			0x200_0000, 0x0, 0x4000_0000, 0x0, 0x0, 0x0, 0x8000_0000, // 32BITS
+			0x100_0000, 0x0, 0x0, 0x6_0000, 0x0, 0x0, 0x1_0000, // IO
+		}),
+	))
+	rbNodes = append(rbNodes, rbNode)
+
+	// acpi PNP0A08:07: ECAM area [mem 0x690010000000-0x69001fffffff] reserved by PNP0C02:09
+	// pci_bus 0012:00: root bus resource [mem 0x690040000000-0x6900bfffffff window]
+	// (bus address [0x40000000-0xbfffffff])
+	// pci_bus 0012:00: root bus resource [mem 0x6900c0000000-0x697fffffffff window]
+	// pci_bus 0012:00: root bus resource [io 0x70000-0x7ffff window] (bus address [0x0000-0xffff])
+	// pci_bus 0012:00: root bus resource [bus 00-ff]
+	rbNode = dt.NewNode("pci-rb", dt.WithProperty(
+		dt.PropertyString("compatible", "pci-rb"),
+		dt.PropertyU64("reg", 0x6900_1000_0000),
+		dt.PropertyU32Array("bus-range", []uint32{0x0, 0xFF}),
+		dt.PropertyU32Array("ranges", []uint32{
+			0x300_0000, 0x6900, 0xC000_0000, 0x0, 0x0, 0x7F, 0x4000_0000, // 64BITS
+			0x200_0000, 0x0, 0x4000_0000, 0x0, 0x0, 0x0, 0x8000_0000, // 32BITS
+			0x100_0000, 0x0, 0x0, 0x7_0000, 0x0, 0x0, 0x1_0000, // IO
+		}),
+	))
+	rbNodes = append(rbNodes, rbNode)
+
+	// acpi PNP0A08:08: ECAM area [mem 0x6a8010000000-0x6a801fffffff] reserved by PNP0C02:0a
+	// pci_bus 0015:00: root bus resource [mem 0x6a8040000000-0x6a80bfffffff window]
+	// (bus address [0x40000000-0xbfffffff])
+	// pci_bus 0015:00: root bus resource [mem 0x6a80c0000000-0x6affffffffff window]
+	// pci_bus 0015:00: root bus resource [io 0x80000-0x8ffff window] (bus address [0x0000-0xffff])
+	// pci_bus 0015:00: root bus resource [bus 00-ff]
+	rbNode = dt.NewNode("pci-rb", dt.WithProperty(
+		dt.PropertyString("compatible", "pci-rb"),
+		dt.PropertyU64("reg", 0x6A80_1000_0000),
+		dt.PropertyU32Array("bus-range", []uint32{0x0, 0xFF}),
+		dt.PropertyU32Array("ranges", []uint32{
+			0x300_0000, 0x6A80, 0xC000_0000, 0x0, 0x0, 0x7F, 0x4000_0000, // 64BITS
+			0x200_0000, 0x0, 0x4000_0000, 0x0, 0x0, 0x0, 0x8000_0000, // 32BITS
+			0x100_0000, 0x0, 0x0, 0x8_0000, 0x0, 0x0, 0x1_0000, // IO
+		}),
+	))
+	rbNodes = append(rbNodes, rbNode)
+
+	// acpi PNP0A08:09: ECAM area [mem 0x6b0010000000-0x6b001fffffff] reserved by PNP0C02:0b
+	// pci_bus 0016:00: root bus resource [mem 0x6b0040000000-0x6b00bfffffff window]
+	// (bus address [0x40000000-0xbfffffff])
+	// pci_bus 0016:00: root bus resource [mem 0x6b00c0000000-0x6bffffffffff window]
+	// pci_bus 0016:00: root bus resource [io 0x90000-0x9ffff window] (bus address [0x0000-0xffff])
+	// pci_bus 0016:00: root bus resource [bus 00-ff]
+	rbNode = dt.NewNode("pci-rb", dt.WithProperty(
+		dt.PropertyString("compatible", "pci-rb"),
+		dt.PropertyU64("reg", 0x6B00_1000_0000),
+		dt.PropertyU32Array("bus-range", []uint32{0x0, 0xFF}),
+		dt.PropertyU32Array("ranges", []uint32{
+			0x300_0000, 0x6B00, 0xC000_0000, 0x0, 0x0, 0xFF, 0x4000_0000, // 64BITS
+			0x200_0000, 0x0, 0x4000_0000, 0x0, 0x0, 0x0, 0x8000_0000, // 32BITS
+			0x100_0000, 0x0, 0x0, 0x9_0000, 0x0, 0x0, 0x1_0000, // IO
+		}),
+	))
+	rbNodes = append(rbNodes, rbNode)
+
+	// acpi PNP0A08:0a: ECAM area [mem 0x6d0010000000-0x6d001fffffff] reserved by PNP0C02:0c
+	// pci_bus 0018:00: root bus resource [mem 0x6d0040000000-0x6d00bfffffff window]
+	// (bus address [0x40000000-0xbfffffff])
+	// pci_bus 0018:00: root bus resource [mem 0x6d00c0000000-0x6dffffffffff window]
+	// pci_bus 0018:00: root bus resource [io 0xa0000-0xaffff window] (bus address [0x0000-0xffff])
+	// pci_bus 0018:00: root bus resource [bus 00-ff]
+	rbNode = dt.NewNode("pci-rb", dt.WithProperty(
+		dt.PropertyString("compatible", "pci-rb"),
+		dt.PropertyU64("reg", 0x6D00_1000_0000),
+		dt.PropertyU32Array("bus-range", []uint32{0x0, 0xFF}),
+		dt.PropertyU32Array("ranges", []uint32{
+			0x300_0000, 0x6D00, 0xC000_0000, 0x0, 0x0, 0xFF, 0x4000_0000, // 64BITS
+			0x200_0000, 0x0, 0x4000_0000, 0x0, 0x0, 0x0, 0x8000_0000, // 32BITS
+			0x100_0000, 0x0, 0x0, 0xA_0000, 0x0, 0x0, 0x1_0000, // IO
+		}),
+	))
+	rbNodes = append(rbNodes, rbNode)
+
+	// acpi PNP0A08:0b: ECAM area [mem 0x6e0010000000-0x6e001fffffff] reserved by PNP0C02:0d
+	// pci_bus 0019:00: root bus resource [mem 0x6e0040000000-0x6e00bfffffff window]
+	// (bus address [0x40000000-0xbfffffff])
+	// pci_bus 0019:00: root bus resource [mem 0x6e00c0000000-0x6effffffffff window]
+	// pci_bus 0019:00: root bus resource [io 0xb0000-0xbffff window] (bus address [0x0000-0xffff])
+	// pci_bus 0019:00: root bus resource [bus 00-ff]
+	rbNode = dt.NewNode("pci-rb", dt.WithProperty(
+		dt.PropertyString("compatible", "pci-rb"),
+		dt.PropertyU64("reg", 0x6E00_1000_0000),
+		dt.PropertyU32Array("bus-range", []uint32{0x0, 0xFF}),
+		dt.PropertyU32Array("ranges", []uint32{
+			0x300_0000, 0x6E00, 0xC000_0000, 0x0, 0x0, 0xFF, 0x4000_0000, // 64BITS
+			0x200_0000, 0x0, 0x4000_0000, 0x0, 0x0, 0x0, 0x8000_0000, // 32BITS
+			0x100_0000, 0x0, 0x0, 0xB_0000, 0x0, 0x0, 0x1_0000, // IO
+		}),
+	))
+	rbNodes = append(rbNodes, rbNode)
+
+	return rbNodes
+}
+
 func buildDeviceTreeInfo(buf io.Writer, mem *kexec.Memory, addr uint64) ([]byte, error) {
 	memNodes := buildDtMemoryNode(mem)
 	rsdpBase, rsdpData, err := getAcpiRsdpData()
@@ -681,6 +931,9 @@ func buildDeviceTreeInfo(buf io.Writer, mem *kexec.Memory, addr uint64) ([]byte,
 	if gmaNode != nil {
 		dtNodes = append(dtNodes, gmaNode)
 	}
+
+	rbNodes := buildRootBridgeNodes()
+	dtNodes = append(dtNodes, rbNodes...)
 
 	dtHeader := dt.Header{
 		Magic:           dt.Magic,
