@@ -45,6 +45,11 @@ const (
 	UniversalPayloadSmbiosTableRevision = 1
 )
 
+const (
+	UniversalPayloadPciSegmentInfoGUID    = "a9e3e037-fcb3-854e-972b-4082fc794054"
+	UniversalPayloadPciRootBridgeRevision = 1
+)
+
 var (
 	kexecMemoryMapFromIOMem = kexec.MemoryMapFromIOMem
 	getSMBIOSBase           = smbios.SMBIOSBase
@@ -63,6 +68,17 @@ type UniversalPayloadSerialPortInfo struct {
 	RegisterStride uint8
 	BaudRate       uint32
 	RegisterBase   EFIPhysicalAddress
+}
+
+type UniversalPayloadSegmentInfo struct {
+	SegmentNumber uint16
+	BaseAddress   uint64
+}
+
+type UniversalPayloadPciSegmentInfo struct {
+	Header      UniversalPayloadGenericHeader
+	Count       uint64
+	SegmentInfo [20]UniversalPayloadSegmentInfo
 }
 
 // Structure member 'Pad' is introduced to match the offset of 'Entry'
@@ -92,6 +108,7 @@ var (
 		UniversalPayloadBaseGUID:           unsafe.Sizeof(UniversalPayloadBase{}),
 		UniversalPayloadAcpiTableGUID:      unsafe.Sizeof(UniversalPayloadAcpiTable{}),
 		UniversalPayloadSmbiosTableGUID:    unsafe.Sizeof(UniversalPayloadSmbiosTable{}),
+		UniversalPayloadPciSegmentInfoGUID: unsafe.Sizeof(UniversalPayloadPciSegmentInfo{}),
 	}
 )
 
@@ -104,6 +121,7 @@ var (
 	ErrWriteHOBBufAcpiTable            = errors.New("failed to append acpi table to buffer")
 	ErrWriteHOBSmbiosTable             = errors.New("failed to append smbios table to buffer")
 	ErrWriteHOBEFICPU                  = errors.New("failed to append CPU HOB to buffer")
+	ErrWriteHOBBufPciSegment           = errors.New("failed to append pci segment hob to buffer")
 	ErrWriteHOBBufList                 = errors.New("failed to append HOB list to buffer")
 	ErrWriteHOBLengthNotMatch          = errors.New("length mismatch when appending")
 	ErrKexecLoadFailed                 = errors.New("kexec.Load() failed")
@@ -168,6 +186,31 @@ func constructSmbiosTable() (*UniversalPayloadSmbiosTable, error) {
 		},
 		SmBiosEntryPoint: EFIPhysicalAddress(smbiosTableBase),
 	}, nil
+}
+
+// Construct Serial Port HOB
+func constructPciSegmentHOB() *UniversalPayloadPciSegmentInfo {
+	return &UniversalPayloadPciSegmentInfo{
+		Header: UniversalPayloadGenericHeader{
+			Revision: UniversalPayloadPciRootBridgeRevision,
+			Length:   uint16(unsafe.Sizeof(UniversalPayloadPciSegmentInfo{})),
+		},
+		Count: 12,
+		SegmentInfo: [20]UniversalPayloadSegmentInfo{
+			{SegmentNumber: 0, BaseAddress: 0x6000_1000_0000},  // PNP0C02:02
+			{SegmentNumber: 2, BaseAddress: 0x6100_1000_0000},  // PNP0C02:03
+			{SegmentNumber: 5, BaseAddress: 0x6280_1000_0000},  // PNP0C02:04
+			{SegmentNumber: 6, BaseAddress: 0x6300_1000_0000},  // PNP0C02:05
+			{SegmentNumber: 8, BaseAddress: 0x6500_1000_0000},  // PNP0C02:06
+			{SegmentNumber: 9, BaseAddress: 0x6600_1000_0000},  // PNP0C02:07
+			{SegmentNumber: 10, BaseAddress: 0x6800_1000_0000}, // PNP0C02:08
+			{SegmentNumber: 12, BaseAddress: 0x6900_1000_0000}, // PNP0C02:09
+			{SegmentNumber: 15, BaseAddress: 0x6A80_1000_0000}, // PNP0C02:0a
+			{SegmentNumber: 16, BaseAddress: 0x6B00_1000_0000}, // PNP0C02:0b
+			{SegmentNumber: 18, BaseAddress: 0x6D00_1000_0000}, // PNP0C02:0c
+			{SegmentNumber: 19, BaseAddress: 0x6E00_1000_0000}, // PNP0C02:0d
+		},
+	}
 }
 
 // Construct system memory resource HOB
@@ -295,6 +338,34 @@ func appendEFICPUHOB(buf *bytes.Buffer, hobLen *uint64) error {
 	return nil
 }
 
+// Construct Pci Segment Info HOB
+func appendPciSegmentInfoHOB(buf *bytes.Buffer, hobLen *uint64) error {
+	pciSegmentsInfo := constructPciSegmentHOB()
+	pciSegmentsGUIDHOB, err := constructGUIDHOB(UniversalPayloadPciSegmentInfoGUID)
+	if err != nil {
+		return err
+	}
+
+	length := uint64(unsafe.Sizeof(EFIHOBGUIDType{}) + unsafe.Sizeof(UniversalPayloadPciSegmentInfo{}))
+	prev := buf.Len()
+
+	if err := binary.Write(buf, binary.LittleEndian, pciSegmentsGUIDHOB); err != nil {
+		return errors.Join(ErrWriteHOBBufPciSegment, err)
+	}
+
+	if err := binary.Write(buf, binary.LittleEndian, pciSegmentsInfo); err != nil {
+		return errors.Join(ErrWriteHOBBufPciSegment, err)
+	}
+
+	if err := alignHOBLength(length, buf.Len()-prev, buf); err != nil {
+		return fmt.Errorf("%w, func = appendPciSegmentInfoHOB()", ErrWriteHOBLengthNotMatch)
+	}
+
+	*hobLen += length
+
+	return nil
+}
+
 func constructHOBList(dst *bytes.Buffer, src *bytes.Buffer, hobLen *uint64) error {
 	handoffHOB := hobCreateEFIHOBHandoffInfoTable(*hobLen)
 	if err := binary.Write(dst, binary.LittleEndian, handoffHOB); err != nil {
@@ -365,6 +436,10 @@ func prepareHob(buf *bytes.Buffer, length *uint64, addr uint64, mem *kexec.Memor
 	}
 
 	if err := appendEFICPUHOB(buf, length); err != nil {
+		return err
+	}
+
+	if err := appendPciSegmentInfoHOB(buf, length); err != nil {
 		return err
 	}
 
