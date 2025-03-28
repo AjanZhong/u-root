@@ -43,6 +43,7 @@ const (
 
 const (
 	UniversalPayloadSmbiosTableGUID     = "260d0a59-e506-204d-8a82-59ea1b34982d"
+	UniversalPayloadSmbios3TableGUID    = "6c89b792-6233-ce46-99b3-4f5e3c34eb42"
 	UniversalPayloadSmbiosTableRevision = 1
 )
 
@@ -93,6 +94,7 @@ var (
 		UniversalPayloadBaseGUID:           unsafe.Sizeof(UniversalPayloadBase{}),
 		UniversalPayloadAcpiTableGUID:      unsafe.Sizeof(UniversalPayloadAcpiTable{}),
 		UniversalPayloadSmbiosTableGUID:    unsafe.Sizeof(UniversalPayloadSmbiosTable{}),
+		UniversalPayloadSmbios3TableGUID:   unsafe.Sizeof(UniversalPayloadSmbiosTable{}),
 	}
 )
 
@@ -161,10 +163,18 @@ func constructUniversalPayloadBase(addr uint64) *UniversalPayloadBase {
 }
 
 // Construct UniversalPayloadSmbiosTable HOB
-func constructSmbiosTable() (*UniversalPayloadSmbiosTable, error) {
-	smbiosTableBase, _, err := getSMBIOSBase()
+func constructSmbiosTable() (*UniversalPayloadSmbiosTable, string, error) {
+	var smbiosVersionGuid string
+
+	smbiosTableBase, size, err := getSMBIOSBase()
 	if err != nil {
-		return nil, errors.Join(ErrFailToGetSmbiosTable, err)
+		return nil, "", errors.Join(ErrFailToGetSmbiosTable, err)
+	}
+
+	if size == smbios.SMBIOS3HeaderSize() {
+		smbiosVersionGuid = UniversalPayloadSmbios3TableGUID
+	} else if size == smbios.SMBIOSHeaderSize() {
+		smbiosVersionGuid = UniversalPayloadSmbiosTableGUID
 	}
 
 	return &UniversalPayloadSmbiosTable{
@@ -173,7 +183,7 @@ func constructSmbiosTable() (*UniversalPayloadSmbiosTable, error) {
 			Length:   uint16(unsafe.Sizeof(UniversalPayloadSmbiosTable{})),
 		},
 		SmBiosEntryPoint: EFIPhysicalAddress(smbiosTableBase),
-	}, nil
+	}, smbiosVersionGuid, nil
 }
 
 // Construct system memory resource HOB
@@ -250,19 +260,18 @@ func appendUniversalPayloadBase(buf *bytes.Buffer, hobLen *uint64, loadAddr uint
 
 func appendSmbiosTableHOB(buf *bytes.Buffer, hobLen *uint64) error {
 	// Construct SMBIOS HOB
-	smbiosTable, err := constructSmbiosTable()
+	smbiosTable, guid, err := constructSmbiosTable()
 	if err != nil {
 		return err
 	}
 
-	smbiosTableGUIDHOB, err := constructGUIDHOB(UniversalPayloadSmbiosTableGUID)
+	smbiosTableGUIDHOB, err := constructGUIDHOB(guid)
 	if err != nil {
 		return err
 	}
 
 	length := uint64(unsafe.Sizeof(EFIHOBGUIDType{}) + unsafe.Sizeof(UniversalPayloadSmbiosTable{}))
 	prev := buf.Len()
-
 	if err := binary.Write(buf, binary.LittleEndian, smbiosTableGUIDHOB); err != nil {
 		return errors.Join(ErrWriteHOBSmbiosTable, err)
 	}

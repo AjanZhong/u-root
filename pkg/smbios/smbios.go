@@ -23,3 +23,11 @@ func SMBIOSBase() (int64, int64, error) {
 	}
 	return base, size, nil
 }
+
+func SMBIOS3HeaderSize() int64 {
+	return smbios3HeaderSize
+}
+
+func SMBIOSHeaderSize() int64 {
+	return smbios2HeaderSize
+}
