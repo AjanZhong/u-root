@@ -212,6 +212,7 @@ const (
 	PCIMMIO64Attr   = 0x140204
 	PCIMMIO32Attr   = 0x40200
 	PCIIOPortAttr   = 0x40100
+	PCIIOPortRes    = 0x100
 	PCIMMIOReadOnly = 0x4000
 	PCIMMIO64Type   = "MMIO64"
 	PCIMMIO32Type   = "MMIO32"
@@ -787,6 +788,11 @@ func getReservedMemoryMap() (kexec.MemoryMap, error) {
 }
 
 func skipReservedRange(mm kexec.MemoryMap, base uint64, attr uint64) bool {
+	if attr&PCIIOPortRes == PCIIOPortRes {
+		fmt.Printf("Keep IO Port (%x) to be checked.\n", base)
+		return false
+	}
+
 	// Skip ReadOnly MMIO, this is ROM region
 	if attr&PCIMMIOReadOnly != 0 {
 		fmt.Printf("Skip base:%x due to RO\n", base)
