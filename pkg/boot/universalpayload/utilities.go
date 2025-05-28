@@ -220,9 +220,7 @@ const (
 	PCIMMIO32Type   = "MMIO32"
 	PCIIOPortType   = "IOPORT"
 
-	PCIMMIO64InvalidBase = 0xFFFF_FFFF_FFFF_FFFF
-	PCIMMIO32InvalidBase = 0xFFFF_FFFF
-	PCIIOPortInvalidBase = 0xFFFF
+	PCIInvalidBase = 0xFFFF_FFFF_FFFF_FFFF
 )
 
 type FdtLoad struct {
@@ -791,22 +789,11 @@ func getReservedMemoryMap() (kexec.MemoryMap, error) {
 
 func skipReservedRange(mm kexec.MemoryMap, base uint64, attr uint64) bool {
 	if attr&PCIIOPortRes == PCIIOPortRes {
-		fmt.Printf("Keep IO Port (%x) to be checked.\n", base)
 		return false
 	}
 
 	// Skip ReadOnly MMIO, this is ROM region
 	if attr&PCIMMIOReadOnly != 0 {
-		return true
-	}
-
-	// Some platform provides 64-bit MMIO with all zero in high 32 bits,
-	// it leads to huge MMIO region for 64-bit, and triggers assertation
-	// in EDK2 since it is actual a 32-bit address, not a 64-bit address.
-	//
-	// Skip this scenario to address above issue.
-	if (attr&PCIMMIO64Attr == PCIMMIO64Attr) && (base>>32 == 0) {
-		fmt.Printf("Skip 64-bit base:%x due to all zero at high part\n", base)
 		return true
 	}
 
@@ -855,10 +842,10 @@ func updateResourceRanges(resourceRegion *ResourceRegions, resType string, base,
 	switch resType {
 	case PCIMMIO64Type:
 		resourceRegion.MMIO64Base = min(base, resourceRegion.MMIO64Base)
-		resourceRegion.MMIO64End = max(end, resourceRegion.MMIO64End)
+		resourceRegion.MMIO64End = max(align.UpPage(end)-1, resourceRegion.MMIO64End)
 	case PCIMMIO32Type:
 		resourceRegion.MMIO32Base = min(base, resourceRegion.MMIO32Base)
-		resourceRegion.MMIO32End = max(end, resourceRegion.MMIO32End)
+		resourceRegion.MMIO32End = max(align.UpPage(end)-1, resourceRegion.MMIO32End)
 	case PCIIOPortType:
 		resourceRegion.IOPortBase = min(base, resourceRegion.IOPortBase)
 		resourceRegion.IOPortEnd = max(end, resourceRegion.IOPortEnd)
@@ -979,9 +966,9 @@ func retrieveRootBridgeResources(path string, item MCFGBaseAddressAllocation) ([
 
 		// Create a new resource region for this bus
 		resourceRegion := &ResourceRegions{
-			MMIO64Base: PCIMMIO64InvalidBase,
-			MMIO32Base: PCIMMIO32InvalidBase,
-			IOPortBase: PCIIOPortInvalidBase,
+			MMIO64Base: PCIInvalidBase,
+			MMIO32Base: PCIInvalidBase,
+			IOPortBase: PCIInvalidBase,
 			StartBus:   bus,
 			EndBus:     bus,
 		}
@@ -1039,6 +1026,16 @@ func retrieveDeviceResources(resourcePath string, mm kexec.MemoryMap) ([]Resourc
 				// Skip corner case when parsing resource region and attribute.
 				if skip := skipReservedRange(mm, base64, attrInt); skip == true {
 					continue
+				}
+
+				// Special case to adapt TianoCore EDK2 logic:
+				// Base address of memory region with attribute of '64bit' or '64bit pref'
+				// should be higher than 32bit, however, some platforms provide 64-bit MMIO
+				// with all zero in high 32 bits, it triggers assertation in EDK2 since this
+				// base address is actual a 32-bit address. To resolve this issue, convert
+				// attribute from 64bit to 32bit, and merge it with other 32bit memory regions.
+				if (attrInt&PCIMMIO64Attr == PCIMMIO64Attr) && (base64>>32 == 0) {
+					attrInt = PCIMMIO32Attr
 				}
 
 				if attrInt&PCIMMIO64Attr == PCIMMIO64Attr {
