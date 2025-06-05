@@ -177,6 +177,10 @@ func hobFromMemMap(memMap kexec.MemoryMap) (EFIMemoryMapHOB, uint64) {
 			continue
 		}
 
+		if EFIPhysicalAddress(entry.Start) == 0xFEE0_0000 {
+			continue
+		}
+
 		if memType == kexec.RangeRAM.String() {
 			resourceType = EFIResourceSystemMemory
 		} else if memType == kexec.RangeReserved.String() {
