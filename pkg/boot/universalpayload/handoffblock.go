@@ -5,6 +5,10 @@
 package universalpayload
 
 import (
+	"bufio"
+	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"unsafe"
 
@@ -159,7 +163,124 @@ const (
 	DefaultIOAddressSize uint8 = 16
 )
 
+// MemoryRegion represents a memory region with start and end addresses
+type MemoryRegion struct {
+	Start uint64
+	End   uint64
+}
+
+// Global arrays to store memory regions
+var runtimeCodeRegions []MemoryRegion
+var runtimeDataRegions []MemoryRegion
+
+// parseAndMergeMemoryRegions parses dmesg log and merges contiguous memory regions
+func parseAndMergeMemoryRegions(dmesgLog string) {
+	scanner := bufio.NewScanner(strings.NewReader(dmesgLog))
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if !strings.Contains(line, "efi: memattr:") {
+			continue
+		}
+
+		// Extract memory range
+		parts := strings.Split(line, "[")
+		if len(parts) != 2 {
+			continue
+		}
+
+		// Parse memory range, handling the optional "!" mark
+		rangeStr := strings.TrimSpace(strings.Split(parts[0], "efi: memattr:")[1])
+		// Remove the "!" mark if present
+		rangeStr = strings.TrimSpace(strings.TrimPrefix(rangeStr, "!"))
+		rangeParts := strings.Split(rangeStr, "-")
+		if len(rangeParts) != 2 {
+			continue
+		}
+
+		start, err := strconv.ParseUint(strings.TrimPrefix(rangeParts[0], "0x"), 16, 64)
+		if err != nil {
+			continue
+		}
+
+		end, err := strconv.ParseUint(strings.TrimPrefix(rangeParts[1], "0x"), 16, 64)
+		if err != nil {
+			continue
+		}
+
+		// Determine if this is Runtime Code or Runtime Data
+		isRuntimeCode := strings.Contains(parts[1], "Runtime Code")
+		targetRegions := &runtimeDataRegions
+		if isRuntimeCode {
+			targetRegions = &runtimeCodeRegions
+		}
+
+		// Check if this region can be merged with existing regions
+		merged := false
+		for i := range *targetRegions {
+			// If new region starts right after an existing region ends
+			if start == (*targetRegions)[i].End+1 {
+				(*targetRegions)[i].End = end
+				merged = true
+				break
+			}
+			// If new region ends right before an existing region starts
+			if end+1 == (*targetRegions)[i].Start {
+				(*targetRegions)[i].Start = start
+				merged = true
+				break
+			}
+		}
+
+		// If not merged, append as new region
+		if !merged {
+			*targetRegions = append(*targetRegions, MemoryRegion{
+				Start: start,
+				End:   end,
+			})
+		}
+	}
+}
+
 type EFIMemoryMapHOB []EFIHOBResourceDescriptor
+
+// readDmesgContent attempts to read dmesg content from either /var/log/dmesg or /proc/kmsg
+func readDmesgContent() ([]byte, error) {
+	// Try to read from /var/log/dmesg first
+	dmesgContent, err := os.ReadFile("/var/log/dmesg")
+	if err == nil {
+		return dmesgContent, nil
+	}
+
+	// If /var/log/dmesg is not available, try /proc/kmsg
+	kmsgFile, err := os.Open("/proc/kmsg")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read dmesg: %v", err)
+	}
+	defer kmsgFile.Close()
+
+	scanner := bufio.NewScanner(kmsgFile)
+	var content strings.Builder
+	for scanner.Scan() {
+		line := scanner.Text()
+		content.WriteString(line)
+		content.WriteString("\n")
+		if strings.Contains(line, "smp: Bringing up secondary CPUs") {
+			break
+		}
+	}
+	return []byte(content.String()), nil
+}
+
+// isInRuntimeMemoryRegion checks if the given address is within any of the runtime code regions
+func isInRuntimeMemoryRegion(addr uint64) bool {
+	for _, region := range runtimeCodeRegions {
+		if addr >= region.Start && addr <= region.End {
+			return true
+		}
+	}
+	return false
+}
 
 // Translate System Map with "System RAM" type to Resource code HOBs.
 func hobFromMemMap(memMap kexec.MemoryMap) (EFIMemoryMapHOB, uint64) {
@@ -167,8 +288,27 @@ func hobFromMemMap(memMap kexec.MemoryMap) (EFIMemoryMapHOB, uint64) {
 	var length uint64
 	var resourceType EFIResourceType
 
-	for _, entry := range memMap {
+	// Try to read dmesg content
+	dmesgContent, err := readDmesgContent()
+	if err != nil {
+		warningMsg = append(warningMsg, err)
+	}
 
+	// Parse and merge memory regions from dmesg if content was read successfully
+	if len(dmesgContent) > 0 {
+		parseAndMergeMemoryRegions(string(dmesgContent))
+	}
+
+	fmt.Printf("Runtime Code Regions:\n")
+	for _, region := range runtimeCodeRegions {
+		fmt.Printf("  Start: 0x%x, End: 0x%x\n", region.Start, region.End)
+	}
+	fmt.Printf("Runtime Data Regions:\n")
+	for _, region := range runtimeDataRegions {
+		fmt.Printf("  Start: 0x%x, End: 0x%x\n", region.Start, region.End)
+	}
+
+	for _, entry := range memMap {
 		memType := strings.TrimSpace(string(entry.Type))
 
 		// Skip resource region of PCI Bus. UniversalPayload utilizes its own
@@ -184,6 +324,9 @@ func hobFromMemMap(memMap kexec.MemoryMap) (EFIMemoryMapHOB, uint64) {
 		if memType == kexec.RangeRAM.String() {
 			resourceType = EFIResourceSystemMemory
 		} else if memType == kexec.RangeReserved.String() {
+			if isInRuntimeMemoryRegion(uint64(entry.Start)) {
+				continue
+			}
 			resourceType = EFIResourceMemoryReserved
 		} else {
 			// Treat all other types to be mapped device MMIO address
@@ -208,6 +351,72 @@ func hobFromMemMap(memMap kexec.MemoryMap) (EFIMemoryMapHOB, uint64) {
 		})
 		length += uint64(unsafe.Sizeof(EFIHOBResourceDescriptor{}))
 	}
+
+	for _, entry := range runtimeCodeRegions {
+		size := entry.End - entry.Start + 1
+
+		memMapHOB = append(memMapHOB, EFIHOBResourceDescriptor{
+			Header: EFIHOBGenericHeader{
+				HOBType:   EFIHOBTypeResourceDescriptor,
+				HOBLength: EFIHOBLength(unsafe.Sizeof(EFIHOBResourceDescriptor{})),
+			},
+			ResourceType: EFIResourceSystemMemory,
+			ResourceAttribute: EFIResourceAttributePresent |
+				EFIResourceAttributeInitialized |
+				EFIResourceAttributeTested |
+				EFIResourceAttributeUncacheable |
+				EFIResourceAttributeWriteCombineable |
+				EFIResourceAttributeWriteThroughCacheable |
+				EFIResourceAttributeWriteBackCacheable,
+			PhysicalStart:  EFIPhysicalAddress(entry.Start),
+			ResourceLength: uint64(align.UpPage(size)),
+		})
+		length += uint64(unsafe.Sizeof(EFIHOBResourceDescriptor{}))
+	}
+
+	for _, entry := range runtimeDataRegions {
+		size := entry.End - entry.Start + 1
+
+		memMapHOB = append(memMapHOB, EFIHOBResourceDescriptor{
+			Header: EFIHOBGenericHeader{
+				HOBType:   EFIHOBTypeResourceDescriptor,
+				HOBLength: EFIHOBLength(unsafe.Sizeof(EFIHOBResourceDescriptor{})),
+			},
+			ResourceType: EFIResourceMemoryReserved,
+			ResourceAttribute: EFIResourceAttributePresent |
+				EFIResourceAttributeInitialized |
+				EFIResourceAttributeTested |
+				EFIResourceAttributeUncacheable |
+				EFIResourceAttributeWriteCombineable |
+				EFIResourceAttributeWriteThroughCacheable |
+				EFIResourceAttributeWriteBackCacheable,
+			PhysicalStart:  EFIPhysicalAddress(entry.Start),
+			ResourceLength: uint64(align.UpPage(size)),
+		})
+		length += uint64(unsafe.Sizeof(EFIHOBResourceDescriptor{}))
+	}
+
+	// Do not copy this snippet of code, this is for testing only. -- start
+	// If you want to test this, please replace 0x4000000 with
+	// value of gEfiMdeModulePkgTokenSpaceGuid.PcdFlashNvStorageVariableBase64
+	memMapHOB = append(memMapHOB, EFIHOBResourceDescriptor{
+		Header: EFIHOBGenericHeader{
+			HOBType:   EFIHOBTypeResourceDescriptor,
+			HOBLength: EFIHOBLength(unsafe.Sizeof(EFIHOBResourceDescriptor{})),
+		},
+		ResourceType: EFIResourceMemoryReserved,
+		ResourceAttribute: EFIResourceAttributePresent |
+			EFIResourceAttributeInitialized |
+			EFIResourceAttributeTested |
+			EFIResourceAttributeUncacheable |
+			EFIResourceAttributeWriteCombineable |
+			EFIResourceAttributeWriteThroughCacheable |
+			EFIResourceAttributeWriteBackCacheable,
+		PhysicalStart:  EFIPhysicalAddress(0x4000000),
+		ResourceLength: uint64(0x100000),
+	})
+	length += uint64(unsafe.Sizeof(EFIHOBResourceDescriptor{}))
+	// Do not copy this snippet of code, this is for testing only. -- End
 
 	length += appendAddonMemMap(&memMapHOB)
 
