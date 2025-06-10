@@ -867,7 +867,11 @@ func processDeviceResources(dirPath string, resourceRegion *ResourceRegions, rsv
 		} else if end, err := strconv.ParseUint(res.EndAddress, 0, 64); err != nil {
 			continue
 		} else {
-			updateResourceRanges(resourceRegion, res.Type, base, end)
+			fmt.Printf("Updating by %s from base:%x to end:%x, type:%s\n", dirPath, base, end, res.Type)
+			// If base and end are all zero, it means no resource assigned to this device.
+			if (base != 0) && (end != 0) {
+				updateResourceRanges(resourceRegion, res.Type, base, end)
+			}
 		}
 	}
 	return nil
@@ -972,6 +976,9 @@ func retrieveRootBridgeResources(path string, item MCFGBaseAddressAllocation) ([
 			StartBus:   bus,
 			EndBus:     bus,
 		}
+		fmt.Printf("%s:%02x resourceRegion: base:%x, base64:%x, IOPortBase:%x, StartBus:%x, EndBus:%x\n",
+			domainIDHex, bus, resourceRegion.MMIO32Base, resourceRegion.MMIO64Base, resourceRegion.IOPortBase,
+			resourceRegion.StartBus, resourceRegion.EndBus)
 
 		// Start processing from the root path
 		if err = filepath.Walk(pciPath, func(path string, info os.FileInfo, err error) error {
@@ -984,6 +991,11 @@ func retrieveRootBridgeResources(path string, item MCFGBaseAddressAllocation) ([
 			return nil, err
 		}
 
+		fmt.Printf("%s:%02x resourceRegion: MMIO32:%x-%x, MMIO64:%x-%x, IOPort:%x-%x, Bus:%x-%x\n",
+			domainIDHex, bus, resourceRegion.MMIO32Base, resourceRegion.MMIO32End,
+			resourceRegion.MMIO64Base, resourceRegion.MMIO64End,
+			resourceRegion.IOPortBase, resourceRegion.IOPortEnd,
+			resourceRegion.StartBus, resourceRegion.EndBus)
 		// Add the resource region to our collection
 		resourceRegions = append(resourceRegions, resourceRegion)
 	}
@@ -1112,9 +1124,25 @@ func createPCIRootBridgeNode(path string, item MCFGBaseAddressAllocation) ([]*dt
 
 	var nodes []*dt.Node
 	for _, resource := range resources {
-		MMIO64Limit := resource.MMIO64End - resource.MMIO64Base + 1
-		MMIO32Limit := resource.MMIO32End - resource.MMIO32Base + 1
-		IOPortLimit := resource.IOPortEnd - resource.IOPortBase + 1
+		// The initial value of MMIO64Base, MMIO32Base, IOPortBase is set
+		// as invalid value. If the base address is valid, the limit is
+		// calculated as end address - base address + 1. Otherwise, the
+		// limit is set as 0.
+		var MMIO64Limit uint64
+		var MMIO32Limit uint64
+		var IOPortLimit uint64
+
+		if resource.MMIO64Base != PCIInvalidBase {
+			MMIO64Limit = resource.MMIO64End - resource.MMIO64Base + 1
+		}
+
+		if resource.MMIO32Base != PCIInvalidBase {
+			MMIO32Limit = resource.MMIO32End - resource.MMIO32Base + 1
+		}
+
+		if resource.IOPortBase != PCIInvalidBase {
+			IOPortLimit = resource.IOPortEnd - resource.IOPortBase + 1
+		}
 
 		node := dt.NewNode("pci-rb", dt.WithProperty(
 			dt.PropertyString("compatible", "pci-rb"),
