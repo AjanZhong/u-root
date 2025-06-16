@@ -867,7 +867,6 @@ func processDeviceResources(dirPath string, resourceRegion *ResourceRegions, rsv
 		} else if end, err := strconv.ParseUint(res.EndAddress, 0, 64); err != nil {
 			continue
 		} else {
-			fmt.Printf("Updating by %s from base:%x to end:%x, type:%s\n", dirPath, base, end, res.Type)
 			// If base and end are all zero, it means no resource assigned to this device.
 			if (base != 0) && (end != 0) {
 				updateResourceRanges(resourceRegion, res.Type, base, end)
@@ -925,11 +924,6 @@ func processDir(dirPath string, resourceRegion *ResourceRegions, rsvdMem kexec.M
 		return nil
 	}
 
-	// Check domain ID match
-	if parts[0] != fmt.Sprintf("%04x", resourceRegion.StartBus) {
-		return nil
-	}
-
 	// Parse bus ID and update EndBus if needed
 	bus, err := strconv.ParseUint(parts[1], 16, 64)
 	if err != nil {
@@ -976,9 +970,6 @@ func retrieveRootBridgeResources(path string, item MCFGBaseAddressAllocation) ([
 			StartBus:   bus,
 			EndBus:     bus,
 		}
-		fmt.Printf("%s:%02x resourceRegion: base:%x, base64:%x, IOPortBase:%x, StartBus:%x, EndBus:%x\n",
-			domainIDHex, bus, resourceRegion.MMIO32Base, resourceRegion.MMIO64Base, resourceRegion.IOPortBase,
-			resourceRegion.StartBus, resourceRegion.EndBus)
 
 		// Start processing from the root path
 		if err = filepath.Walk(pciPath, func(path string, info os.FileInfo, err error) error {
@@ -991,11 +982,6 @@ func retrieveRootBridgeResources(path string, item MCFGBaseAddressAllocation) ([
 			return nil, err
 		}
 
-		fmt.Printf("%s:%02x resourceRegion: MMIO32:%x-%x, MMIO64:%x-%x, IOPort:%x-%x, Bus:%x-%x\n",
-			domainIDHex, bus, resourceRegion.MMIO32Base, resourceRegion.MMIO32End,
-			resourceRegion.MMIO64Base, resourceRegion.MMIO64End,
-			resourceRegion.IOPortBase, resourceRegion.IOPortEnd,
-			resourceRegion.StartBus, resourceRegion.EndBus)
 		// Add the resource region to our collection
 		resourceRegions = append(resourceRegions, resourceRegion)
 	}
@@ -1160,7 +1146,7 @@ func createPCIRootBridgeNode(path string, item MCFGBaseAddressAllocation) ([]*dt
 				0x100_0000, // IO
 				high64(resource.IOPortBase), low64(resource.IOPortBase),
 				0x0, 0x0,
-				high64(MMIO32Limit), low64(IOPortLimit),
+				high64(IOPortLimit), low64(IOPortLimit),
 			}),
 		))
 
