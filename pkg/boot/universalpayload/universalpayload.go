@@ -10,11 +10,14 @@
 package universalpayload
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"unsafe"
 
 	guid "github.com/google/uuid"
@@ -44,6 +47,11 @@ const (
 const (
 	UniversalPayloadSmbiosTableGUID     = "260d0a59-e506-204d-8a82-59ea1b34982d"
 	UniversalPayloadSmbiosTableRevision = 1
+)
+
+const (
+	UniversalPayloadEFISystemTableBaseGUID     = "b4e6d888-d70f-4f0e-9bd0-1908e2d09bf1"
+	UniversalPayloadEFISystemTableBaseRevision = 1
 )
 
 var (
@@ -85,15 +93,21 @@ type UniversalPayloadSmbiosTable struct {
 	SmBiosEntryPoint EFIPhysicalAddress
 }
 
+type UniversalPayloadEFISystemTableBase struct {
+	Header          UniversalPayloadGenericHeader
+	SystemTableBase EFIPhysicalAddress
+}
+
 // Map GUID string to size of corresponding structure. Use
 // this map to simplify the length calculation in function
 // constructGUIDHOB.
 var (
 	guidToLength = map[string]uintptr{
-		UniversalPayloadSerialPortInfoGUID: unsafe.Sizeof(UniversalPayloadSerialPortInfo{}),
-		UniversalPayloadBaseGUID:           unsafe.Sizeof(UniversalPayloadBase{}),
-		UniversalPayloadAcpiTableGUID:      unsafe.Sizeof(UniversalPayloadAcpiTable{}),
-		UniversalPayloadSmbiosTableGUID:    unsafe.Sizeof(UniversalPayloadSmbiosTable{}),
+		UniversalPayloadSerialPortInfoGUID:     unsafe.Sizeof(UniversalPayloadSerialPortInfo{}),
+		UniversalPayloadBaseGUID:               unsafe.Sizeof(UniversalPayloadBase{}),
+		UniversalPayloadAcpiTableGUID:          unsafe.Sizeof(UniversalPayloadAcpiTable{}),
+		UniversalPayloadSmbiosTableGUID:        unsafe.Sizeof(UniversalPayloadSmbiosTable{}),
+		UniversalPayloadEFISystemTableBaseGUID: unsafe.Sizeof(UniversalPayloadEFISystemTableBase{}),
 	}
 )
 
@@ -105,8 +119,10 @@ var (
 	ErrWriteHOBBufUniversalPayloadBase = errors.New("failed to append universal payload base to buffer")
 	ErrWriteHOBBufAcpiTable            = errors.New("failed to append acpi table to buffer")
 	ErrWriteHOBSmbiosTable             = errors.New("failed to append smbios table to buffer")
+	ErrWriteHOBEFIRuntimeService       = errors.New("failed to append EFI runtime service to buffer")
 	ErrWriteHOBEFICPU                  = errors.New("failed to append CPU HOB to buffer")
 	ErrWriteHOBBufList                 = errors.New("failed to append HOB list to buffer")
+	ErrWriteHOBBufEFISystemTableBase   = errors.New("failed to append EFI system table base to buffer")
 	ErrWriteHOBLengthNotMatch          = errors.New("length mismatch when appending")
 	ErrKexecLoadFailed                 = errors.New("kexec.Load() failed")
 	ErrKexecExecuteFailed              = errors.New("kexec.Execute() failed")
@@ -134,6 +150,55 @@ func constructGUIDHOB(name string) (*EFIHOBGUIDType, error) {
 			HOBLength: EFIHOBLength(length),
 		},
 		Name: id,
+	}, nil
+}
+
+func readDmesgContent() ([]byte, error) {
+	// Try to read from /var/log/dmesg first
+	dmesgContent, err := os.ReadFile("/var/log/dmesg")
+	if err == nil {
+		return dmesgContent, nil
+	}
+
+	// If /var/log/dmesg is not available, try /proc/kmsg
+	kmsgFile, err := os.Open("/proc/kmsg")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read dmesg: %v", err)
+	}
+	defer kmsgFile.Close()
+
+	scanner := bufio.NewScanner(kmsgFile)
+	var content strings.Builder
+	for scanner.Scan() {
+		line := scanner.Text()
+		content.WriteString(line)
+		content.WriteString("\n")
+		if strings.Contains(line, "by EDK II") {
+			break
+		}
+	}
+	return []byte(content.String()), nil
+}
+
+func constructEFISystemTableBaseHOB() (*UniversalPayloadEFISystemTableBase, error) {
+	dmesgContent, err := readDmesgContent()
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract system table base address from dmesg content
+	systemTableBase, err := extractSystemTableBase(string(dmesgContent))
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("systemTableBase: %X\n", systemTableBase)
+	return &UniversalPayloadEFISystemTableBase{
+		Header: UniversalPayloadGenericHeader{
+			Revision: UniversalPayloadEFISystemTableBaseRevision,
+			Length:   uint16(unsafe.Sizeof(UniversalPayloadEFISystemTableBase{})),
+		},
+		SystemTableBase: EFIPhysicalAddress(systemTableBase),
 	}, nil
 }
 
@@ -303,6 +368,38 @@ func appendEFICPUHOB(buf *bytes.Buffer, hobLen *uint64) error {
 	return nil
 }
 
+func appendEFISystemTableBaseHOB(buf *bytes.Buffer, hobLen *uint64) error {
+	// Construct EFI System Table Base HOB
+	efiSystemTableBase, err := constructEFISystemTableBaseHOB()
+	if err != nil {
+		return err
+	}
+
+	efiSystemTableBaseGUIDHOB, err := constructGUIDHOB(UniversalPayloadEFISystemTableBaseGUID)
+	if err != nil {
+		return err
+	}
+
+	length := uint64(unsafe.Sizeof(EFIHOBGUIDType{}) + unsafe.Sizeof(UniversalPayloadEFISystemTableBase{}))
+	prev := buf.Len()
+
+	if err := binary.Write(buf, binary.LittleEndian, efiSystemTableBaseGUIDHOB); err != nil {
+		return errors.Join(ErrWriteHOBBufEFISystemTableBase, err) // Reusing existing error for now
+	}
+
+	if err := binary.Write(buf, binary.LittleEndian, efiSystemTableBase); err != nil {
+		return errors.Join(ErrWriteHOBBufEFISystemTableBase, err) // Reusing existing error for now
+	}
+
+	if err := alignHOBLength(length, buf.Len()-prev, buf); err != nil {
+		return errors.Join(ErrWriteHOBLengthNotMatch, err)
+	}
+
+	*hobLen += length
+
+	return nil
+}
+
 func constructHOBList(dst *bytes.Buffer, src *bytes.Buffer, hobLen *uint64) error {
 	handoffHOB := hobCreateEFIHOBHandoffInfoTable(*hobLen)
 	if err := binary.Write(dst, binary.LittleEndian, handoffHOB); err != nil {
@@ -396,6 +493,10 @@ func prepareHob(buf *bytes.Buffer, length *uint64, loadAddr uint64, mem *kexec.M
 	}
 
 	if err := appendEFICPUHOB(buf, length); err != nil {
+		return err
+	}
+
+	if err := appendEFISystemTableBaseHOB(buf, length); err != nil {
 		return err
 	}
 
@@ -609,4 +710,41 @@ func Exec() error {
 	}
 
 	return nil
+}
+
+// extractSystemTableBase extracts the System Table Base address from dmesg content
+func extractSystemTableBase(dmesgContent string) (uint64, error) {
+	scanner := bufio.NewScanner(strings.NewReader(dmesgContent))
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		fmt.Println(line)
+		if strings.Contains(line, "System Table") {
+			// Extract the address part after the colon
+			parts := strings.Split(line, ":")
+			fmt.Println(parts)
+			fmt.Print("length of parts: ", len(parts))
+			if len(parts) != 3 {
+				continue
+			}
+
+			fmt.Println("parts[1]: %s\n", parts[1])
+			fmt.Println("parts[2]: %s\n", parts[2])
+			// Trim whitespace and remove "0x" prefix
+			addrStr := strings.TrimSpace(parts[2])
+			addrStr = strings.TrimPrefix(addrStr, "0x")
+
+			fmt.Println(addrStr)
+
+			// Parse the address
+			addr, err := strconv.ParseUint(addrStr, 16, 64)
+			if err != nil {
+				return 0, fmt.Errorf("failed to parse system table base address: %v", err)
+			}
+
+			return addr, nil
+		}
+	}
+
+	return 0, fmt.Errorf("system table base address not found in dmesg")
 }
