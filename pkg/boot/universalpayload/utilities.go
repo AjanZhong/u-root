@@ -24,6 +24,7 @@ import (
 	"github.com/u-root/u-root/pkg/align"
 	"github.com/u-root/u-root/pkg/boot/kexec"
 	"github.com/u-root/u-root/pkg/dt"
+	"github.com/u-root/u-root/pkg/efivarfs"
 )
 
 var sysfsCPUInfoPath = "/proc/cpuinfo"
@@ -98,8 +99,10 @@ const (
 )
 
 const (
-	sysfsFbPath  = "/dev/fb0"
-	sysfsDrmPath = "/sys/class/drm"
+	sysfsFbPath      = "/dev/fb0"
+	sysfsDrmPath     = "/sys/class/drm"
+	efiVarsPath      = "/sys/firmware/efi/efivars"
+	uRootEFIVarMagic = "u-root-efivar-v1"
 )
 
 // Definitions for ioctl and framebuffer structures in Go
@@ -271,6 +274,8 @@ var (
 	ErrMcfgSignatureMismatch       = errors.New("acpi mcfg signature mismatch")
 	ErrMcfgBaseAddrAllocCorrupt    = errors.New("acpi mcfg base address allocation data corrupt")
 	ErrMcfgBaseAddrAllocDecode     = errors.New("failed to decode mcfg base address allocation structure")
+	ErrEFIVarsOpenFailed           = errors.New("failed to open efivars directory")
+	ErrEFIVarsReadFailed           = errors.New("failed to read efivar")
 )
 
 func parseUint64ToUint32(val uint64) uint32 {
@@ -1223,6 +1228,100 @@ func constructPCIRootBridgeNodes() ([]*dt.Node, error) {
 	return rbNodes, nil
 }
 
+// buildEFIVariableNodes creates device tree nodes for all EFI variables
+// found in /sys/firmware/efi/efivars. Each node contains the variable name,
+// GUID, attributes, and data.
+func buildEFIVariableNodes() ([]*dt.Node, error) {
+	var efiVarNodes []*dt.Node
+
+	// Open the efivarfs directory
+	efiVarFS, err := efivarfs.NewPath(efiVarsPath)
+	if err != nil {
+		// If efivarfs is not available, return empty list (not an error)
+		// This allows the code to continue even if EFI variables are not accessible
+		return nil, fmt.Errorf("failed to open efivarfs directory: %w", err)
+	}
+
+	// List all EFI variables
+	descriptors, err := efiVarFS.List()
+	if err != nil {
+		// If listing fails, return empty list (not an error)
+		return nil, fmt.Errorf("failed to list EFI variables: %w", err)
+	}
+
+	// Create a node for each EFI variable
+	for _, desc := range descriptors {
+		// Read the variable attributes and data
+		attrs, data, err := efiVarFS.Get(desc)
+		if err != nil {
+			// Skip variables that can't be read
+			continue
+		}
+
+		// Create a sanitized node name from the variable name and GUID
+		// Device tree node names must be valid identifiers
+		nodeName := sanitizeNodeName(fmt.Sprintf("%s-%s", desc.Name, desc.GUID.String()))
+
+		// Create the node with properties
+		node := dt.NewNode(nodeName, dt.WithProperty(
+			dt.PropertyString("magic", uRootEFIVarMagic),
+			dt.PropertyString("name", desc.Name),
+			dt.PropertyString("guid", desc.GUID.String()),
+			dt.PropertyU32("attributes", uint32(attrs)),
+			dt.Property{
+				Name:  "data",
+				Value: data,
+			},
+		))
+
+		efiVarNodes = append(efiVarNodes, node)
+	}
+
+	return efiVarNodes, nil
+}
+
+// sanitizeNodeName converts a string to a valid device tree node name.
+// Device tree node names can contain letters, digits, and certain special
+// characters, but must start with a letter or digit.
+func sanitizeNodeName(name string) string {
+	if name == "" {
+		return "efivar"
+	}
+
+	// Replace invalid characters with underscores
+	var result strings.Builder
+	for i, r := range name {
+		// Ensure the name doesn't start with a number or special character
+		if i == 0 {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				result.WriteRune(r)
+			} else {
+				// If first character is not a letter, prefix with "efivar_"
+				result.WriteString("efivar_")
+				if (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '@' {
+					result.WriteRune(r)
+				} else {
+					result.WriteRune('_')
+				}
+			}
+		} else {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+				result.WriteRune(r)
+			} else if r == '-' || r == '_' || r == '@' {
+				result.WriteRune(r)
+			} else {
+				result.WriteRune('_')
+			}
+		}
+	}
+
+	sanitized := result.String()
+	if sanitized == "" {
+		return "efivar"
+	}
+	return sanitized
+}
+
 func buildDeviceTreeInfo(buf io.Writer, mem *kexec.Memory, loadAddr uint64, rsdpBase uint64) error {
 	memNodes := buildDtMemoryNode(mem)
 
@@ -1265,6 +1364,16 @@ func buildDeviceTreeInfo(buf io.Writer, mem *kexec.Memory, loadAddr uint64, rsdp
 	} else {
 		if pciRbNodes != nil {
 			dtNodes = append(dtNodes, pciRbNodes...)
+		}
+	}
+
+	if efiVarNodes, err := buildEFIVariableNodes(); err != nil {
+		// If we failed to construct EFI variable nodes, prompt error
+		// message to indicate error message, and continue construct DTB.
+		warningMsg = append(warningMsg, err)
+	} else {
+		if efiVarNodes != nil {
+			dtNodes = append(dtNodes, efiVarNodes...)
 		}
 	}
 
