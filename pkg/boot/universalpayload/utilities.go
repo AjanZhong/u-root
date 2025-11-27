@@ -1258,9 +1258,9 @@ func buildEFIVariableNodes() ([]*dt.Node, error) {
 			continue
 		}
 
-		// Create a sanitized node name from the variable name and GUID
-		// Device tree node names must be valid identifiers
-		nodeName := sanitizeNodeName(fmt.Sprintf("%s-%s", desc.Name, desc.GUID.String()))
+		// Create node name with "efivar@" prefix for consistency
+		// The @ symbol is commonly used in device tree for unit addresses
+		nodeName := fmt.Sprintf("efivar@%s", desc.Name)
 
 		// Create the node with properties
 		node := dt.NewNode(nodeName, dt.WithProperty(
@@ -1278,48 +1278,6 @@ func buildEFIVariableNodes() ([]*dt.Node, error) {
 	}
 
 	return efiVarNodes, nil
-}
-
-// sanitizeNodeName converts a string to a valid device tree node name.
-// Device tree node names can contain letters, digits, and certain special
-// characters, but must start with a letter or digit.
-func sanitizeNodeName(name string) string {
-	if name == "" {
-		return "efivar"
-	}
-
-	// Replace invalid characters with underscores
-	var result strings.Builder
-	for i, r := range name {
-		// Ensure the name doesn't start with a number or special character
-		if i == 0 {
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
-				result.WriteRune(r)
-			} else {
-				// If first character is not a letter, prefix with "efivar_"
-				result.WriteString("efivar_")
-				if (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '@' {
-					result.WriteRune(r)
-				} else {
-					result.WriteRune('_')
-				}
-			}
-		} else {
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-				result.WriteRune(r)
-			} else if r == '-' || r == '_' || r == '@' {
-				result.WriteRune(r)
-			} else {
-				result.WriteRune('_')
-			}
-		}
-	}
-
-	sanitized := result.String()
-	if sanitized == "" {
-		return "efivar"
-	}
-	return sanitized
 }
 
 func buildDeviceTreeInfo(buf io.Writer, mem *kexec.Memory, loadAddr uint64, rsdpBase uint64) error {
