@@ -297,10 +297,14 @@ func maybeInitSetup() {
 	}
 	libinit.SetEnv()
 	libinit.CreateRootfs()
-	libinit.NetInit()
 	if err := libinit.InstallAllModules(); err != nil {
 		log.Printf("module load: %v", err)
 	}
+	loadInputModules()
+	if err := attachConsoles(); err != nil {
+		log.Printf("attach consoles: %v", err)
+	}
+	libinit.NetInit()
 }
 
 func emergencyShell() {
@@ -318,6 +322,7 @@ func emergencyShell() {
 
 func (c *cmd) run() error {
 	maybeInitSetup()
+	c.stdin, c.stdout, c.stderr = os.Stdin, os.Stdout, os.Stderr
 
 	if pid := os.Getpid(); pid != 1 {
 		log.Printf("warning: pid is %d, not 1; switch_root needs pid 1 (use u-root -initcmd=nvmfboot)", pid)
