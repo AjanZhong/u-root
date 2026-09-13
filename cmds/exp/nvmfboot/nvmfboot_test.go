@@ -7,13 +7,13 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"flag"
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateTransport(t *testing.T) {
@@ -101,8 +101,8 @@ func TestDefaultPartition(t *testing.T) {
 
 func TestPromptString(t *testing.T) {
 	var out bytes.Buffer
-	r := bufio.NewReader(strings.NewReader("\n"))
-	got, err := promptString(r, &out, "NVMe-oF address", defaultAddr)
+	c := command(strings.NewReader("\n"), &out, io.Discard, &options{timeout: time.Second})
+	got, err := c.promptString(newLineSource(c.stdin), "NVMe-oF address", defaultAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,8 +111,8 @@ func TestPromptString(t *testing.T) {
 	}
 
 	out.Reset()
-	r = bufio.NewReader(strings.NewReader("10.0.0.2\n"))
-	got, err = promptString(r, &out, "NVMe-oF address", defaultAddr)
+	c = command(strings.NewReader("10.0.0.2\n"), &out, io.Discard, &options{timeout: time.Second})
+	got, err = c.promptString(newLineSource(c.stdin), "NVMe-oF address", defaultAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,9 +121,26 @@ func TestPromptString(t *testing.T) {
 	}
 }
 
+func TestPromptTimeoutUsesDefault(t *testing.T) {
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { pw.Close() })
+	var out bytes.Buffer
+	c := command(pr, &out, io.Discard, &options{timeout: 50 * time.Millisecond})
+	got, err := c.promptString(newLineSource(pr), "NVMe-oF port", defaultPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != defaultPort {
+		t.Errorf("timeout: got %q, want default %q", got, defaultPort)
+	}
+	if !strings.Contains(out.String(), "timeout, using default") {
+		t.Errorf("timeout message missing: %q", out.String())
+	}
+}
+
 func TestPromptUntilYesUsesDefault(t *testing.T) {
 	c := command(strings.NewReader(""), io.Discard, io.Discard, &options{yes: true})
-	got, err := c.promptUntil(bufio.NewReader(c.stdin), "port", "44420", validatePort)
+	got, err := c.promptUntil(newLineSource(c.stdin), "port", "44420", validatePort)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,6 +179,9 @@ func TestFlagDefaults(t *testing.T) {
 	}
 	if o.init != defaultInit {
 		t.Errorf("init = %q", o.init)
+	}
+	if o.timeout != defaultPromptTimeout {
+		t.Errorf("timeout = %v", o.timeout)
 	}
 }
 

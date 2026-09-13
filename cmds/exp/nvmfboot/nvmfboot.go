@@ -14,7 +14,8 @@
 //
 //	Intended to run as PID 1 (u-root -initcmd=nvmfboot) so switch_root can
 //	replace the ramfs with the remote root filesystem. At each step that
-//	needs input, nvmfboot prompts and accepts Enter to keep the default.
+//	needs input, nvmfboot prompts for 10s and accepts Enter to keep the
+//	default. If there is no input before the timeout, the default is used.
 //
 // Example:
 //
@@ -45,15 +46,16 @@ import (
 )
 
 const (
-	defaultTransport  = "tcp"
-	defaultAddr       = "192.168.2.218"
-	defaultPort       = "44420"
-	defaultNQN        = "nqn.2026-03.spdk.newfw:3a0b838a-c8fe-4955-a76b-d6767c376f9e"
-	defaultHostNQN    = "nqn.2014-08.org.nvmexpress:uuid:035e02d8-04d3-0580-2a06-d40700080009"
-	defaultDevice     = "/dev/nvme0n1p4"
-	defaultMountPoint = "/mnt"
-	defaultInit       = "/sbin/init"
-	deviceWait        = 15 * time.Second
+	defaultTransport     = "tcp"
+	defaultAddr          = "192.168.2.218"
+	defaultPort          = "44420"
+	defaultNQN           = "nqn.2026-03.spdk.newfw:3a0b838a-c8fe-4955-a76b-d6767c376f9e"
+	defaultHostNQN       = "nqn.2014-08.org.nvmexpress:uuid:035e02d8-04d3-0580-2a06-d40700080009"
+	defaultDevice        = "/dev/nvme0n1p4"
+	defaultMountPoint    = "/mnt"
+	defaultInit          = "/sbin/init"
+	deviceWait           = 15 * time.Second
+	defaultPromptTimeout = 10 * time.Second
 )
 
 var (
@@ -75,6 +77,7 @@ type options struct {
 	init       string
 	yes        bool
 	deviceSet  bool
+	timeout    time.Duration
 }
 
 func (o *options) register(fs *flag.FlagSet) {
@@ -94,6 +97,7 @@ func (o *options) register(fs *flag.FlagSet) {
 	fs.StringVar(&o.mountPoint, "mountpoint", defaultMountPoint, "mount point")
 	fs.StringVar(&o.init, "init", defaultInit, "init to exec after switch_root")
 	fs.BoolVar(&o.yes, "y", false, "do not prompt; use flags and defaults")
+	fs.DurationVar(&o.timeout, "timeout", defaultPromptTimeout, "prompt timeout; no input uses the default")
 }
 
 type cmd struct {
@@ -130,17 +134,55 @@ func (c *cmd) runExec(name string, args ...string) ([]byte, error) {
 	return buf.Bytes(), err
 }
 
-func promptString(r *bufio.Reader, w io.Writer, label, def string) (string, error) {
-	fmt.Fprintf(w, "%s [%s]: ", label, def)
-	line, err := r.ReadString('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return "", err
+type lineResult struct {
+	line string
+	err  error
+}
+
+type lineSource struct {
+	ch chan lineResult
+}
+
+func newLineSource(r io.Reader) *lineSource {
+	src := &lineSource{ch: make(chan lineResult)}
+	go func() {
+		br := bufio.NewReader(r)
+		for {
+			line, err := br.ReadString('\n')
+			src.ch <- lineResult{line: strings.TrimSpace(line), err: err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return src
+}
+
+func (c *cmd) promptTimeout() time.Duration {
+	if c.opts != nil && c.opts.timeout > 0 {
+		return c.opts.timeout
 	}
-	line = strings.TrimSpace(line)
-	if line == "" {
+	return defaultPromptTimeout
+}
+
+func (c *cmd) promptString(src *lineSource, label, def string) (string, error) {
+	timeout := c.promptTimeout()
+	fmt.Fprintf(c.stdout, "%s [%s] (%s): ", label, def, timeout)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case res := <-src.ch:
+		if res.err != nil && !errors.Is(res.err, io.EOF) {
+			return "", res.err
+		}
+		if res.line == "" {
+			return def, nil
+		}
+		return res.line, nil
+	case <-timer.C:
+		fmt.Fprintf(c.stdout, "\ntimeout, using default %s\n", def)
 		return def, nil
 	}
-	return line, nil
 }
 
 func validateTransport(t string) error {
@@ -201,7 +243,7 @@ func defaultPartition(ctrl, fallback string) string {
 	return "/dev/" + base + "n1p4"
 }
 
-func (c *cmd) promptUntil(r *bufio.Reader, label, def string, validate func(string) error) (string, error) {
+func (c *cmd) promptUntil(src *lineSource, label, def string, validate func(string) error) (string, error) {
 	if c.opts.yes {
 		if err := validate(def); err != nil {
 			return "", err
@@ -209,7 +251,7 @@ func (c *cmd) promptUntil(r *bufio.Reader, label, def string, validate func(stri
 		return def, nil
 	}
 	for {
-		v, err := promptString(r, c.stdout, label, def)
+		v, err := c.promptString(src, label, def)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				if err := validate(def); err != nil {
@@ -339,33 +381,33 @@ func (c *cmd) run() error {
 		return fmt.Errorf("dhclient: %w", err)
 	}
 
-	r := bufio.NewReader(c.stdin)
-	fmt.Fprintln(c.stdout, "nvmfboot: NVMe-oF connect parameters (Enter keeps the default)")
-	transport, err := c.promptUntil(r, "NVMe-oF transport (tcp or rdma)", c.opts.transport, validateTransport)
+	src := newLineSource(c.stdin)
+	fmt.Fprintf(c.stdout, "nvmfboot: NVMe-oF connect parameters (Enter keeps the default, timeout %s)\n", c.promptTimeout())
+	transport, err := c.promptUntil(src, "NVMe-oF transport (tcp or rdma)", c.opts.transport, validateTransport)
 	if err != nil {
 		return err
 	}
 	c.opts.transport = strings.ToLower(transport)
 
-	addr, err := c.promptUntil(r, "NVMe-oF address", c.opts.traddr, validateAddr)
+	addr, err := c.promptUntil(src, "NVMe-oF address", c.opts.traddr, validateAddr)
 	if err != nil {
 		return err
 	}
 	c.opts.traddr = addr
 
-	port, err := c.promptUntil(r, "NVMe-oF port", c.opts.trsvcid, validatePort)
+	port, err := c.promptUntil(src, "NVMe-oF port", c.opts.trsvcid, validatePort)
 	if err != nil {
 		return err
 	}
 	c.opts.trsvcid = port
 
-	nqn, err := c.promptUntil(r, "Subsystem NQN", c.opts.nqn, validateNonEmpty)
+	nqn, err := c.promptUntil(src, "Subsystem NQN", c.opts.nqn, validateNonEmpty)
 	if err != nil {
 		return err
 	}
 	c.opts.nqn = nqn
 
-	hostnqn, err := c.promptUntil(r, "Host NQN", c.opts.hostnqn, validateNonEmpty)
+	hostnqn, err := c.promptUntil(src, "Host NQN", c.opts.hostnqn, validateNonEmpty)
 	if err != nil {
 		return err
 	}
@@ -392,14 +434,14 @@ func (c *cmd) run() error {
 		fmt.Fprintf(c.stdout, "nvmfboot: available NVMe devices: %s\n", strings.Join(devs, " "))
 	}
 
-	fmt.Fprintln(c.stdout, "nvmfboot: mount parameters (Enter keeps the default)")
-	device, err := c.promptUntil(r, "Mount device partition", c.opts.device, validateNonEmpty)
+	fmt.Fprintf(c.stdout, "nvmfboot: mount parameters (Enter keeps the default, timeout %s)\n", c.promptTimeout())
+	device, err := c.promptUntil(src, "Mount device partition", c.opts.device, validateNonEmpty)
 	if err != nil {
 		return err
 	}
 	c.opts.device = device
 
-	mp, err := c.promptUntil(r, "Mount point", c.opts.mountPoint, validateNonEmpty)
+	mp, err := c.promptUntil(src, "Mount point", c.opts.mountPoint, validateNonEmpty)
 	if err != nil {
 		return err
 	}
