@@ -102,7 +102,7 @@ func TestDefaultPartition(t *testing.T) {
 func TestPromptString(t *testing.T) {
 	var out bytes.Buffer
 	c := command(strings.NewReader("\n"), &out, io.Discard, &options{timeout: time.Second})
-	got, err := c.promptString(newLineSource(c.stdin), "NVMe-oF address", defaultAddr)
+	got, err := c.promptString(newByteSource(c.stdin), "NVMe-oF address", defaultAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +112,7 @@ func TestPromptString(t *testing.T) {
 
 	out.Reset()
 	c = command(strings.NewReader("10.0.0.2\n"), &out, io.Discard, &options{timeout: time.Second})
-	got, err = c.promptString(newLineSource(c.stdin), "NVMe-oF address", defaultAddr)
+	got, err = c.promptString(newByteSource(c.stdin), "NVMe-oF address", defaultAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestPromptTimeoutUsesDefault(t *testing.T) {
 	t.Cleanup(func() { pw.Close() })
 	var out bytes.Buffer
 	c := command(pr, &out, io.Discard, &options{timeout: 50 * time.Millisecond})
-	got, err := c.promptString(newLineSource(pr), "NVMe-oF port", defaultPort)
+	got, err := c.promptString(newByteSource(pr), "NVMe-oF port", defaultPort)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,9 +138,42 @@ func TestPromptTimeoutUsesDefault(t *testing.T) {
 	}
 }
 
+func TestPromptKeyStopsTimeout(t *testing.T) {
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { pw.Close() })
+	var out bytes.Buffer
+	c := command(pr, &out, io.Discard, &options{timeout: 80 * time.Millisecond})
+	src := newByteSource(pr)
+	done := make(chan string, 1)
+	errc := make(chan error, 1)
+	go func() {
+		got, err := c.promptString(src, "NVMe-oF address", defaultAddr)
+		errc <- err
+		done <- got
+	}()
+	time.Sleep(20 * time.Millisecond)
+	if _, err := pw.Write([]byte("1")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if _, err := pw.Write([]byte("0.0.0.2\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+	got := <-done
+	if got != "10.0.0.2" {
+		t.Errorf("got %q, want 10.0.0.2 after keypress canceled timeout", got)
+	}
+	if strings.Contains(out.String(), "timeout, using default") {
+		t.Errorf("timeout should not fire after a keypress: %q", out.String())
+	}
+}
+
 func TestPromptUntilYesUsesDefault(t *testing.T) {
 	c := command(strings.NewReader(""), io.Discard, io.Discard, &options{yes: true})
-	got, err := c.promptUntil(newLineSource(c.stdin), "port", "44420", validatePort)
+	got, err := c.promptUntil(newByteSource(c.stdin), "port", "44420", validatePort)
 	if err != nil {
 		t.Fatal(err)
 	}

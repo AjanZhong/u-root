@@ -14,8 +14,9 @@
 //
 //	Intended to run as PID 1 (u-root -initcmd=nvmfboot) so switch_root can
 //	replace the ramfs with the remote root filesystem. At each step that
-//	needs input, nvmfboot prompts for 10s and accepts Enter to keep the
-//	default. If there is no input before the timeout, the default is used.
+//	needs input, nvmfboot prompts for 10s. Any keypress cancels the
+//	timeout so the line can be finished. Enter or an idle timeout keeps
+//	the default.
 //
 // Example:
 //
@@ -23,7 +24,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"flag"
@@ -134,28 +134,63 @@ func (c *cmd) runExec(name string, args ...string) ([]byte, error) {
 	return buf.Bytes(), err
 }
 
-type lineResult struct {
-	line string
-	err  error
+type byteResult struct {
+	b   byte
+	err error
 }
 
-type lineSource struct {
-	ch chan lineResult
+type byteSource struct {
+	ch chan byteResult
 }
 
-func newLineSource(r io.Reader) *lineSource {
-	src := &lineSource{ch: make(chan lineResult)}
+func newByteSource(r io.Reader) *byteSource {
+	src := &byteSource{ch: make(chan byteResult, 256)}
 	go func() {
-		br := bufio.NewReader(r)
+		buf := make([]byte, 1)
+		prevCR := false
 		for {
-			line, err := br.ReadString('\n')
-			src.ch <- lineResult{line: strings.TrimSpace(line), err: err}
+			n, err := r.Read(buf)
+			if n > 0 {
+				b := buf[0]
+				if prevCR && b == '\n' {
+					prevCR = false
+					if err != nil {
+						src.ch <- byteResult{err: err}
+						return
+					}
+					continue
+				}
+				prevCR = b == '\r'
+				if b == '\r' {
+					b = '\n'
+				}
+				src.ch <- byteResult{b: b}
+			}
 			if err != nil {
+				src.ch <- byteResult{err: err}
 				return
 			}
 		}
 	}()
 	return src
+}
+
+func enableCharInput(f *os.File) func() {
+	fd := int(f.Fd())
+	old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	if err != nil {
+		return func() {}
+	}
+	next := *old
+	next.Lflag &^= unix.ICANON
+	next.Cc[unix.VMIN] = 1
+	next.Cc[unix.VTIME] = 0
+	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &next); err != nil {
+		return func() {}
+	}
+	return func() {
+		_ = unix.IoctlSetTermios(fd, unix.TCSETS, old)
+	}
 }
 
 func (c *cmd) promptTimeout() time.Duration {
@@ -165,23 +200,57 @@ func (c *cmd) promptTimeout() time.Duration {
 	return defaultPromptTimeout
 }
 
-func (c *cmd) promptString(src *lineSource, label, def string) (string, error) {
+func (c *cmd) promptString(src *byteSource, label, def string) (string, error) {
 	timeout := c.promptTimeout()
 	fmt.Fprintf(c.stdout, "%s [%s] (%s): ", label, def, timeout)
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
-	select {
-	case res := <-src.ch:
-		if res.err != nil && !errors.Is(res.err, io.EOF) {
-			return "", res.err
+
+	var b strings.Builder
+	gotKey := false
+	for {
+		var timerC <-chan time.Time
+		if !gotKey {
+			timerC = timer.C
 		}
-		if res.line == "" {
+		select {
+		case res := <-src.ch:
+			if res.err != nil && !errors.Is(res.err, io.EOF) {
+				return "", res.err
+			}
+			if res.err != nil && b.Len() == 0 && !gotKey {
+				return def, nil
+			}
+			gotKey = true
+			timer.Stop()
+			if res.err != nil {
+				line := strings.TrimSpace(b.String())
+				if line == "" {
+					return def, nil
+				}
+				return line, nil
+			}
+			switch res.b {
+			case '\n':
+				line := strings.TrimSpace(b.String())
+				if line == "" {
+					return def, nil
+				}
+				return line, nil
+			case '\b', 0x7f:
+				s := b.String()
+				if s == "" {
+					continue
+				}
+				b.Reset()
+				b.WriteString(s[:len(s)-1])
+			default:
+				b.WriteByte(res.b)
+			}
+		case <-timerC:
+			fmt.Fprintf(c.stdout, "\ntimeout, using default %s\n", def)
 			return def, nil
 		}
-		return res.line, nil
-	case <-timer.C:
-		fmt.Fprintf(c.stdout, "\ntimeout, using default %s\n", def)
-		return def, nil
 	}
 }
 
@@ -243,7 +312,7 @@ func defaultPartition(ctrl, fallback string) string {
 	return "/dev/" + base + "n1p4"
 }
 
-func (c *cmd) promptUntil(src *lineSource, label, def string, validate func(string) error) (string, error) {
+func (c *cmd) promptUntil(src *byteSource, label, def string, validate func(string) error) (string, error) {
 	if c.opts.yes {
 		if err := validate(def); err != nil {
 			return "", err
@@ -381,8 +450,12 @@ func (c *cmd) run() error {
 		return fmt.Errorf("dhclient: %w", err)
 	}
 
-	src := newLineSource(c.stdin)
-	fmt.Fprintf(c.stdout, "nvmfboot: NVMe-oF connect parameters (Enter keeps the default, timeout %s)\n", c.promptTimeout())
+	if f, ok := c.stdin.(*os.File); ok {
+		restore := enableCharInput(f)
+		defer restore()
+	}
+	src := newByteSource(c.stdin)
+	fmt.Fprintf(c.stdout, "nvmfboot: NVMe-oF connect parameters (Enter keeps the default; any key cancels %s timeout)\n", c.promptTimeout())
 	transport, err := c.promptUntil(src, "NVMe-oF transport (tcp or rdma)", c.opts.transport, validateTransport)
 	if err != nil {
 		return err
@@ -434,7 +507,7 @@ func (c *cmd) run() error {
 		fmt.Fprintf(c.stdout, "nvmfboot: available NVMe devices: %s\n", strings.Join(devs, " "))
 	}
 
-	fmt.Fprintf(c.stdout, "nvmfboot: mount parameters (Enter keeps the default, timeout %s)\n", c.promptTimeout())
+	fmt.Fprintf(c.stdout, "nvmfboot: mount parameters (Enter keeps the default; any key cancels %s timeout)\n", c.promptTimeout())
 	device, err := c.promptUntil(src, "Mount device partition", c.opts.device, validateNonEmpty)
 	if err != nil {
 		return err
